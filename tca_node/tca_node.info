@@ -1,0 +1,6 @@
+name = Token Content Access nodes
+description = Adds Token Content Access functionality for nodes.
+core = 7.x
+dependencies[] = tca
+dependencies[] = node
+dependencies[] = ctools
