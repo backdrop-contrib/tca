@@ -4,3 +4,9 @@
  * Update file for Token Content Access nodes module.
  */
 
+/**
+ * Upgrade from Drupal 7 to Backdrop CMS.
+ */
+function hook_update_1000() {
+
+}

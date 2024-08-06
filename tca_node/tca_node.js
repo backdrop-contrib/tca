@@ -1,18 +1,32 @@
 (function($) {
-  'use strict';
+  Backdrop.behaviors.tcaNode = {
+    attach: function (context) {
+      var $context = $(context);
+      var summary = '';
+      var enabled = Backdrop.t('Enabled');
+      var disabled = Backdrop.t('Disabled');
 
-  Drupal.behaviors.tcaNode = {
-    attach: function (context, settings) {
-
-      // Set the summary for the settings form.
-      $('fieldset.tca-settings-form').drupalSetSummary(function() {
-        var $tcaActive = $('.tca-active-setting input:checked');
-
-        // Get the label of the selected action.
-        var summary = $('label[for=' + $tcaActive.attr('id') + ']').text();
-        return Drupal.checkPlain(summary);
+      $context.find('fieldset#edit-tca').backdropSetSummary(function() {
+        // Set the summary for the node form.
+        if ($context.find('input[name="tca_active"]').length) {
+          if ($context.find('input[name="tca_active"]:checked').length) {
+            summary = enabled;
+          }
+          else {
+            summary = disabled;
+          }
+        }
+        // Set the summary for the node type settings form.
+        if ($context.find('input[name="tca_node_active"]').length) {
+          if ($context.find('input[name="tca_node_active"]:checked').length) {
+            summary = enabled;
+          }
+          else {
+            summary = disabled;
+          }
+        }
+        return summary;
       });
-
     }
   };
 

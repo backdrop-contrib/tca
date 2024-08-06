@@ -1,3 +1,4 @@
 name = Token Content Access
 description = Provides access control for entities based on a URL token.
-core = 7.x
+backdrop = 1.x
+type = module
