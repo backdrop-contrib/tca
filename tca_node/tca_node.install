@@ -5,8 +5,30 @@
  */
 
 /**
+ * Implements hook_uninstall().
+ */
+function tca_node_uninstall() {
+  $table = 'node';
+  $fields = array(
+    'tca_active',
+    'tca_token',
+  );
+  foreach ($fields as $field) {
+    if (db_field_exists($table, $field)) {
+      db_drop_field($table, $field);
+    }
+  }
+}
+
+/**
  * Upgrade from Drupal 7 to Backdrop CMS.
  */
-function hook_update_1000() {
-
+function tca_node_update_1000() {
+  $node_types = node_type_get_names();
+  $config = config('tca_node.settings');
+  foreach ($node_types as $name => $label) {
+    $config->set($name, update_variable_get('tca_node_active_' . $name, 0));
+    update_variable_del('tca_node_active_' . $name);
+  }
+  $config->save();
 }

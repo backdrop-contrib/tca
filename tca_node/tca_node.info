@@ -1,7 +1,13 @@
-description = Adds Token Content Access functionality for nodes.
-name = Token Content Access nodes
+description = Adds Token Content Access functionality for Nodes.
+name = Token Content Access Nodes
 backdrop = 1.x
 type = module
+
+maintainers[yorkshire-pudding] = Martin Price
+
+package = Access control
+tags[] = Tokens
+tags[] = Content
+
 dependencies[] = tca
 dependencies[] = node
-; dependencies[] = ctools

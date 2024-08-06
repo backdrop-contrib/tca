@@ -2,3 +2,9 @@ name = Token Content Access
 description = Provides access control for entities based on a URL token.
 backdrop = 1.x
 type = module
+
+maintainers[yorkshire-pudding] = Martin Price
+
+package = Access control
+tags[] = Tokens
+tags[] = Content
