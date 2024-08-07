@@ -41,7 +41,7 @@ function tca_node_form_node_type_form_alter(&$form, $form_state) {
   // Add the Token Content Access form, and add an extra javascript file that's
   // needed for the fieldset summary.
   tca_form($form, $form_state, 'node', $form['#node_type']->type, 'tca_node');
-  $form['#attached']['js'][] = backdrop_get_path('module', 'tca_node') . '/tca_node.js';
+  $form['#attached']['js'][] = backdrop_get_path('module', 'tca_node') . '/js/tca_node.js';
 }
 
 /**
@@ -70,7 +70,7 @@ function tca_node_form_node_form_alter(&$form, $form_state) {
   // Add the Token Content Access form, and add an extra javascript file that's
   // needed for the fieldset summary.
   tca_form($form, $form_state, 'node', $form['#node']->type, 'tca_node', $form['#node']);
-  $form['#attached']['js'][] = backdrop_get_path('module', 'tca_node') . '/tca_node.js';
+  $form['#attached']['js'][] = backdrop_get_path('module', 'tca_node') . '/js/tca_node.js';
 
   // Add a custom submit function. This is used to disable the redirect to
   // node/123 if Token Content Access is enabled and the user doesn't have the
