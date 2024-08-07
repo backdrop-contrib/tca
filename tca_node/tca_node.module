@@ -160,15 +160,22 @@ function tca_node_node_type_delete($type) {
 }
 
 /**
- * Implements hook_views_query_alter().
+ * Implements hook_views_api().
  */
-function tca_views_query_alter(&$view, &$query) {
-  // Alter all node queries to remove TCA protected nodes if user does not have
-  // bypass access.
-  if ($query->base_table == 'node' && !user_access('bypass tca_node')) {
-    $query->add_field('node', 'tca_active', 'tca_active');
-    $query->add_where_expression(0, "node.tca_active = '0' OR node.tca_active IS NULL");
-  }
+function tca_node_views_api() {
+  return array(
+    'api' => 3,
+    'path' => backdrop_get_path('module', 'tca_node') . '/views',
+  );
+}
+
+/**
+ * Implements hook_autoload_info().
+ */
+function tca_node_autoload_info() {
+  return array(
+    'tca_node_views_plugin_display_extender' => 'views/tca_node_views_plugin_display_extender.inc',
+  );
 }
 
 /**
