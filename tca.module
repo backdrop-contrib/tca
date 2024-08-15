@@ -254,7 +254,7 @@ function tca_form(array &$attach, $form_state, $entity_type, $bundle, $module, $
     $form['tca']['tca_' . $entity_type . '_active'] = array(
       '#type' => 'checkbox',
       '#title' => t('Enable Token Content Access protection.'),
-      '#default_value' => tca_get_active_bundle($entity_type, $bundle),
+      '#default_value' => !empty($bundle) ? tca_get_active_bundle($entity_type, $bundle) : FALSE,
       '#description' => t('If this is checked, users with the %permission permission will be able to enable Token Content Access protection for individual entities.', array('%permission' => t('Administer Token Content Access settings for @entity_type', array('@entity_type' => $entity_label)))),
     );
   }
