@@ -82,9 +82,9 @@ function tca_node_views_plugins() {
   $plugins = array();
 
   $plugins['display_extender'] = array(
-    'mymodule' => array(
-      'title' => t('Some Setting'),
-      'help' => t('A description of the setting.'),
+    'tca_node' => array(
+      'title' => t('Token Content Access Node Override'),
+      'help' => t('Token Content Access Node restricts access to views if you don\'t have the permission to bypass. This is mostly desirable but there may be some views you wish to enable, for example, a view of contextual information in a block on the node. Use with caution.'),
       'path' => $path,
       'handler' => 'tca_node_views_plugin_display_extender',
     ),

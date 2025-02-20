@@ -16,6 +16,7 @@ function tca_node_config_info() {
       'group' => t('Configuration'),
     ),
   );
+  return $config;
 }
 
 /**
@@ -56,8 +57,35 @@ function tca_node_bundle_form_submit($form, &$form_state) {
   // Get the setting from the form.
   $setting = (bool) $form_state['values']['tca_node_active'];
 
+  // Get the existing config.
+  $config = config('tca_node.settings');
+  $config_existing_setting = (bool) $config->get($type);
+
+  // If we are changing the setting from enabled to disabled then we should
+  // also set all currently active nodes to be disabled and set the token to
+  // NULL. While loading the page can check if the node type is enabled or not,
+  // it does not seem possible to do this in Views.
+  if ($config_existing_setting && !$setting) {
+    $query = new EntityFieldQuery;
+    $results = $query->entityCondition('entity_type', 'node')
+      ->entityCondition('bundle', $type)
+      ->propertyCondition('tca_active', 1)
+      ->execute();
+    if (isset($results['node'])) {
+      $active_nodes = entity_load_multiple('node', array_keys($results['node']));
+      foreach ($active_nodes as $nid => $node) {
+        $node->tca_active = 0;
+        $node->tca_token = NULL;
+        $node->save();
+      }
+    }
+  }
+
   // Add the setting for the node type to config.
-  config_set('tca_node.settings', $type, $setting);
+  $config->set($type, $setting);
+  $config->save();
+
+  // dpm($form);
 }
 
 /**
