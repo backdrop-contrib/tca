@@ -16,6 +16,7 @@ function tca_node_config_info() {
       'group' => t('Configuration'),
     ),
   );
+  return $config;
 }
 
 /**
@@ -54,7 +55,10 @@ function tca_node_bundle_form_submit($form, &$form_state) {
   $type = $form_state['values']['type'];
 
   // Get the setting from the form.
-  $setting = (bool) $form_state['values']['tca_node_active'];
+  $setting = array(
+    'active' => (bool) $form_state['values']['tca_node_active'],
+    'forced' => (bool) $form_state['values']['tca_node_forced'],
+  );
 
   // Add the setting for the node type to config.
   config_set('tca_node.settings', $type, $setting);
@@ -111,6 +115,7 @@ function tca_node_node_view($node, $view_mode, $langcode) {
   // Execute Token Content Access, if the node is being viewed at its own page
   // using the full view mode, and the current user isn't able to override Token
   // Content Access.
+  dpm($node);
   if ($view_mode == 'full' && node_is_page($node) && !user_access('bypass tca_node')) {
     tca_execute('node', $node);
   }

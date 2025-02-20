@@ -118,7 +118,8 @@ function tca_permission() {
   $modules = module_invoke_all('tca');
   foreach ($modules as $module => $info) {
     // Get information about the entity.
-    $entity_info = entity_get_info($info['entity type']);
+    $entity_type = $info['entity type'];
+    $entity_info = entity_get_info($entity_type);
     $entity_label = strtolower(isset($entity_info['plural label']) ? $entity_info['plural label'] : $entity_info['label']);
 
     // Add an administer permission.
@@ -126,12 +127,36 @@ function tca_permission() {
       'title' => t('Administer Token Content Access settings for @entity_type', array('@entity_type' => $entity_label)),
     );
 
-    // Add a bypass permission.
+    // Add a bypass permission for the entity type.
     $permissions['bypass ' . $module] = array(
       'title' => t('Bypass Token Content Access action for @entity_type', array('@entity_type' => $entity_label)),
       'description' => t('Allows user to bypass the action that has been configured for @entity_type.', array('@entity_type' => $entity_label)),
       'restrict access' => TRUE,
     );
+    // If the entity type supports bundles and more than one bundle exists, add
+    // a bypass permission for each bundle.
+    // dpm($entity_info);
+    $bundles = $entity_info['bundles'];
+    // The 'bundle keys' property appears in entity info that supports bundles
+    // e.g. 'node', 'file' but not 'user' so appears to be a reliable indicator
+    // of whether an entity supports bundles or not.
+    if (isset($entity_info['bundle keys']) && count($bundles) > 1) {
+      foreach ($bundles as $bundle_name => $bundle) {
+        $bundle_label = $bundle['label'];
+        // $config = tca_get_active_bundle('')
+        $permissions['bypass ' . $module . ' ' . $bundle_name] = array(
+          'title' => t('Bypass Token Content Access action for @bundle_label @entity_type', array(
+            '@entity_type' => $entity_label,
+            '@bundle_label' => $bundle_label,
+          )),
+          'description' => t('Allows user to bypass the action that has been configured for @bundle_label @entity_type', array(
+            '@entity_type' => $entity_label,
+            '@bundle_label' => $bundle_label,
+          )),
+        );
+      }
+    }
+
   }
 
   if (!empty($permissions)) {
@@ -208,6 +233,7 @@ function tca_menu_local_tasks_alter(&$data, $router_item, $root_path) {
  *   the form is being attached to the bundle configuration form.
  */
 function tca_form(array &$attach, $form_state, $entity_type, $bundle, $module, $entity = NULL) {
+  dpm($form_state);
   if (!user_access('administer ' . $module)) {
     // The user doesn't have access, exit.
     return;
@@ -225,7 +251,10 @@ function tca_form(array &$attach, $form_state, $entity_type, $bundle, $module, $
 
   // Get the label for the bundle. This won't be set when the user is creating a
   // new bundle. In that case, fallback to "this bundle".
-  $bundle_label = isset($entity_info['bundles'][$bundle]['label']) ? $entity_info['bundles'][$bundle]['label'] : 'this bundle';
+  $bundle_label = isset($entity_info['bundles'][$bundle]['label']) ? $entity_info['bundles'][$bundle]['label'] : 'this type of ';
+
+  // Get the 'forced' status for the entity type and bundle.
+  $forced_bundle = !empty($bundle) ? tca_get_forced_bundle($entity_type, $bundle) : FALSE;
 
   // Wrap everything in a fieldset.
   $form['tca'] = array(
@@ -257,17 +286,34 @@ function tca_form(array &$attach, $form_state, $entity_type, $bundle, $module, $
       '#default_value' => !empty($bundle) ? tca_get_active_bundle($entity_type, $bundle) : FALSE,
       '#description' => t('If this is checked, users with the %permission permission will be able to enable Token Content Access protection for individual entities.', array('%permission' => t('Administer Token Content Access settings for @entity_type', array('@entity_type' => $entity_label)))),
     );
+    $form['tca']['tca_' . $entity_type . '_forced'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Enforce Token usage'),
+      '#default_value' => $forced_bundle,
+      '#description' => t('Enforce usage of Tokens on @bundle_label @entity_label', array(
+        '@entity_label' => $entity_label,
+        '@bundle_label' => $bundle_label,
+      )),
+      '#states' => array(
+        'visible' => array(
+          ':input[name="tca_' . $entity_type . '_active"]' => ['checked' => TRUE],
+        ),
+      ),
+    );
   }
 
   // Add Token activation if we're editing a new or existing entity.
   if (isset($entity)) {
+    $active = isset($entity) ? tca_get_active_entity($entity_type, $entity) : FALSE;
+    dpm($active ? 'TRUE' : 'FALSE');
     // Add activation settings.
     $form['tca']['tca_active'] = array(
       '#type' => 'checkbox',
       '#title' => t('Enable Token Content Access protection.'),
-      '#default_value' => isset($entity) ? tca_get_active_entity($entity_type, $entity) : FALSE,
-      '#description' => t('Prevent users from viewing an this @bundle page w/o providing an access token via the URL.', array('@bundle' => strtolower(isset($entity_info['plural label']) ? $entity_info['plural label'] : $bundle_label))),
+      '#default_value' => $forced_bundle ? TRUE : $active,
+      '#description' => t('Prevent users from viewing this @bundle page without providing an access token via the URL.', array('@bundle' => strtolower(isset($entity_info['plural label']) ? $entity_info['plural label'] : $bundle_label))),
       '#attributes' => array('class' => array('tca-active-setting')),
+      '#disabled' => $forced_bundle,
     );
 
     // Only populate token information if we are editing an existing entity.
@@ -392,7 +438,24 @@ function tca_form_validate($form, &$form_state) {
  */
 function tca_get_active_bundle($entity_type, $bundle) {
   $setting = config_get('tca_' . $entity_type . '.settings', $bundle);
-  return $setting;
+  return $setting['active'];
+}
+
+/**
+ * Gets the Token Content Access forced state for a bundle.
+ *
+ * @param string $entity_type
+ *   The entity type of the bundle.
+ * @param string $bundle
+ *   The bundle that we're checking.
+ *
+ * @return bool
+ *   TRUE or FALSE depending on whether or not Token Content Access
+ *   is enforced for this bundle
+ */
+function tca_get_forced_bundle($entity_type, $bundle) {
+  $setting = config_get('tca_' . $entity_type . '.settings', $bundle);
+  return $setting['forced'];
 }
 
 /**
