@@ -526,8 +526,11 @@ function tca_entity_get_bundle($entity_type, $entity) {
  *   The entity that is being viewed.
  */
 function tca_execute($entity_type, $entity) {
+  // First get and check if the bundle is active.
+  $bundle = tca_entity_get_bundle($entity_type, $entity);
+  $active_bundle = tca_get_active_bundle($entity_type, $bundle);
   // Make sure Token Content Access is enabled for this entity.
-  if (tca_get_active_entity($entity_type, $entity)) {
+  if ($active_bundle && tca_get_active_entity($entity_type, $entity)) {
     // Get query parameters.
     $query = backdrop_get_query_parameters();
     // Get the token value for this entity.
