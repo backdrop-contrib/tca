@@ -21,6 +21,29 @@ function tca_node_uninstall() {
 }
 
 /**
+ * Convert config from flat array to nested array to support more settings per
+ * content type
+ */
+function tca_node_update_1100() {
+  // Retrieve the existing config.
+  $config = config('tca_node.settings');
+  $original_config = $config->get();
+
+  // For each node type, add the existing active setting to an array with a
+  // FALSE setting for 'forced' - the new functionality - and set the config.
+  foreach ($original_config as $node_type => $active) {
+    $new_config = array(
+      'active' => $active,
+      'forced' => FALSE,
+    );
+    $config->set($node_type, $new_config);
+  }
+
+  // Save the config.
+  $config->save();
+}
+
+/**
  * Upgrade from Drupal 7 to Backdrop CMS.
  */
 function tca_node_update_1000() {

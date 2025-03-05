@@ -62,13 +62,13 @@ function tca_node_bundle_form_submit($form, &$form_state) {
 
   // Get the existing config.
   $config = config('tca_node.settings');
-  $config_existing_setting = (bool) $config->get($type);
+  $config_existing_setting = $config->get($type);
 
   // If we are changing the setting from enabled to disabled then we should
   // also set all currently active nodes to be disabled and set the token to
   // NULL. While loading the page can check if the node type is enabled or not,
   // it does not seem possible to do this in Views.
-  if ($config_existing_setting && !$setting) {
+  if (!is_null($config_existing_setting) && $config_existing_setting['active'] && !$setting['active']) {
     $query = new EntityFieldQuery;
     $results = $query->entityCondition('entity_type', 'node')
       ->entityCondition('bundle', $type)
@@ -87,8 +87,6 @@ function tca_node_bundle_form_submit($form, &$form_state) {
   // Add the setting for the node type to config.
   $config->set($type, $setting);
   $config->save();
-
-  // dpm($form);
 }
 
 /**
@@ -142,8 +140,8 @@ function tca_node_node_view($node, $view_mode, $langcode) {
   // Execute Token Content Access, if the node is being viewed at its own page
   // using the full view mode, and the current user isn't able to override Token
   // Content Access.
-  dpm($node);
-  if ($view_mode == 'full' && node_is_page($node) && !user_access('bypass tca_node')) {
+  $bypass_permission = tca_bypass_permission_exists('tca_node', $node->type);
+  if ($view_mode == 'full' && node_is_page($node) && !$bypass_permission) {
     tca_execute('node', $node);
   }
 }

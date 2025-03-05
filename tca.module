@@ -135,7 +135,6 @@ function tca_permission() {
     );
     // If the entity type supports bundles and more than one bundle exists, add
     // a bypass permission for each bundle.
-    // dpm($entity_info);
     $bundles = $entity_info['bundles'];
     // The 'bundle keys' property appears in entity info that supports bundles
     // e.g. 'node', 'file' but not 'user' so appears to be a reliable indicator
@@ -156,11 +155,34 @@ function tca_permission() {
         );
       }
     }
-
   }
 
   if (!empty($permissions)) {
     return $permissions;
+  }
+}
+
+/**
+ * Checks if bypass permission exists.
+ *
+ * @param string $module
+ *   The module being checked.
+ * @param string $bundle
+ *   The bundle to check.
+ *
+ * @return boolean
+ *   Returns TRUE if bypass permission exists, false otherwise.
+ */
+function tca_bypass_permission_exists($module, $bundle) {
+  // Check for module level bypass permission.
+  $module_bypass = user_access('bypass ' . $module);
+  // Check for bundle level permission.
+  $bundle_bypass = user_access('bypass ' . $module . ' ' . $bundle);
+  if ($module_bypass || $bundle_bypass) {
+    return TRUE;
+  }
+  else {
+    return FALSE;
   }
 }
 
@@ -233,7 +255,7 @@ function tca_menu_local_tasks_alter(&$data, $router_item, $root_path) {
  *   the form is being attached to the bundle configuration form.
  */
 function tca_form(array &$attach, $form_state, $entity_type, $bundle, $module, $entity = NULL) {
-  dpm($form_state);
+  // Check that the user has permission to access this TCA form.
   if (!user_access('administer ' . $module)) {
     // The user doesn't have access, exit.
     return;
@@ -278,7 +300,7 @@ function tca_form(array &$attach, $form_state, $entity_type, $bundle, $module, $
     '#value' => $entity_type,
   );
 
-  // Add override setting if we're editing a bundle.
+  // Add type settings if we're editing a bundle.
   if (!isset($entity)) {
     $form['tca']['tca_' . $entity_type . '_active'] = array(
       '#type' => 'checkbox',
@@ -305,7 +327,6 @@ function tca_form(array &$attach, $form_state, $entity_type, $bundle, $module, $
   // Add Token activation if we're editing a new or existing entity.
   if (isset($entity)) {
     $active = isset($entity) ? tca_get_active_entity($entity_type, $entity) : FALSE;
-    dpm($active ? 'TRUE' : 'FALSE');
     // Add activation settings.
     $form['tca']['tca_active'] = array(
       '#type' => 'checkbox',
@@ -392,9 +413,7 @@ function tca_form(array &$attach, $form_state, $entity_type, $bundle, $module, $
   if (function_exists($submit_function) && !isset($entity)) {
     $attach['#submit'][] = $submit_function;
   }
-
 }
-
 
 /**
  * Callback for "Regenerate Token" button.
@@ -404,7 +423,6 @@ function tca_form(array &$attach, $form_state, $entity_type, $bundle, $module, $
 function tca_token_replace_callback(&$form, &$form_state) {
   return $form['tca']['token'];
 }
-
 
 /**
  * Submit handler for the "Regenerate Token" button.
@@ -438,7 +456,7 @@ function tca_form_validate($form, &$form_state) {
  */
 function tca_get_active_bundle($entity_type, $bundle) {
   $setting = config_get('tca_' . $entity_type . '.settings', $bundle);
-  return $setting['active'];
+  return $setting['active'] ?? FALSE;
 }
 
 /**
@@ -455,7 +473,7 @@ function tca_get_active_bundle($entity_type, $bundle) {
  */
 function tca_get_forced_bundle($entity_type, $bundle) {
   $setting = config_get('tca_' . $entity_type . '.settings', $bundle);
-  return $setting['forced'];
+  return $setting['forced'] ?? FALSE;
 }
 
 /**
@@ -506,7 +524,7 @@ function tca_entity_get_bundle($entity_type, $entity) {
 
   // Use the bundle key to get the bundle for this entity if the bundle key has
   // been defined. If it hasn't, it means that this entity only provides one
-  // bundle, and that bundle will always have the same name as the entoty type.
+  // bundle, and that bundle will always have the same name as the entity type.
   // E.g, the user entity is built by one bundle, and that bundle is also called
   // user.
   //
