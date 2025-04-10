@@ -35,6 +35,8 @@ function tca_node_update_1100() {
     $new_config = array(
       'active' => $active,
       'forced' => FALSE,
+      'override' => FALSE,
+      'parameter_key' => config_get('tca.settings', 'default_parameter_key'),
     );
     $config->set($node_type, $new_config);
   }

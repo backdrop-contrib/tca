@@ -59,7 +59,7 @@ class tca_node_views_plugin_display_extender extends views_plugin_display_extend
    */
   public function options_summary(&$categories, &$options) {
     $options['tca_node'] = array(
-      'category' => 'other',
+      'category' => 'token_content_access',
       'title' => t('Token Content Access Node Override'),
       'value' => ($this->display->get_option('tca_node_override')) ? 'Yes' : 'No',
       'desc' => t('Override the Token Content Access Node restrictions for this view display.'),

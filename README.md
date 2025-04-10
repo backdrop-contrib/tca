@@ -13,17 +13,23 @@ getting started. More detailed documentation should be moved to a GitHub wiki
 page; for example: https://github.com/backdrop-contrib/setup/wiki/Documentation.
 -->
 Token Content Access allows you to restrict access to individual entities using
-URL tokens. In order to view protected entities, users must provide a unique
-token via the URL.
+manually set or unique generated tokens. In order to view protected entities,
+users must provide a matching token via the URL.
 
 This allows entities to be published and viewable to anonymous users (for
 instance with a special link from an email campaign) but not visible to the
 public at large.
 
-Permissions are provided to administer each entity based module and to bypass
-the protection for all entities in that module and for bundles (e.g. Content
-Types for Token Content Access Nodes).
+Views can also be protected using a token; for Views Page display, then access
+is denied, but for other display types, the rows are removed so it returns an
+empty result.
 
+Permissions are provided to administer the module and each entity based module
+and to bypass the protection for all entities in that module and for bundles
+(e.g. Content Types for Token Content Access Nodes).
+
+## Submodule(s)
+### Token Content Access Nodes
 Node protection is available in the included Token Content Access Nodes
 (`tca_node`) submodule and this can be used as a model to extend to other
 entities such as taxonomy terms, users, files and custom entities. It protects
@@ -36,7 +42,31 @@ copy it to share.
 This module is designed with performance in mind, so it doesn't use traditional
 solutions like node grants. This also means that it's not guaranteed to block
 access in all situations, for instance, if you expose node content via means
-other than Views.
+other than Views such as using the "Existing content" block in a layout or
+in an Entity Reference field.
+
+## Differences from Drupal 7
+- Support token and TCA status in Views
+- Include an override in Views displays to include protected nodes in a
+display.
+- Support protection of Views.
+- Add bypass permissions per bundle (e.g. per Content Type for Nodes) and for
+Views.
+- Allow token usage to be enforced per bundle
+- Allow token to be overriden manually so you can set the same as another
+entity.
+- Allow parameter key to be configured for the site and per bundle and View.
+- Store the token in the session so user can access other nodes or Views using
+the same token without having to re-enter the URL parameter.
+- Copy the token from another node with a token.
+- Copy the token from another part of the same Book (top of book or parent menu
+item).
+- Use Views Bulk Operations to activate and manually add or generate a token,
+and to deactivate TCA Node from nodes.
+- Optional and configurable flood control to provide additional protection
+against attempts to brute force the token.
+
+Most of these additional features are also not available in Drupal 8+.
 
 ## Installation
 <!--
@@ -45,20 +75,11 @@ necessary.
 -->
 - Install this module using the official Backdrop CMS instructions at
   https://docs.backdropcms.org/documentation/extend-with-modules.
-- Also install the 'Token Content Access Nodes' module.
+- Also enable the 'Token Content Access Nodes' module.
 
 ## Usage
-### Token Content Access Nodes
-Configurable per Content Type on the "Token Content Access settings" tab. To
-enable, just check "Enable Token Content Access protection" on the content
-type Configuration screen and then you will see the "Token Content Access
-settings" tab on the individual node editing page. You can also force the
-protection to be applied to every node in that content type; when this setting
-is enabled, this will apply to new nodes and when an existing node is edited.
-
-By default Nodes with Token Content Access protection will be excluded from
-Views but you can override that with the "Token Content Access Node Override"
-setting, which is applied to each display within the View.
+For documentation on how to use the module including advanced usage, see the
+documentation pages at https://docs.backdropcms.org/documentation/add-ons/token-content-access.
 
 ## Issues
 <!--
