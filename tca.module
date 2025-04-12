@@ -68,6 +68,9 @@ function tca_modules_enabled($modules) {
           db_add_field($entity_info['base table'], $name, $spec);
         }
       }
+
+      // Ensure permissions are added to admin role.
+      user_modules_installed($module);
     }
   }
 }
