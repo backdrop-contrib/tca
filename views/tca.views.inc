@@ -14,7 +14,24 @@ function tca_views_query_alter(&$view, &$query) {
   $view_bypass_permission = user_access('bypass tca views protect');
 
   if ($tca_views_protect && !$view_bypass_permission) {
-    $view_token = $display->display_options['tca_token'];
+    if ($display->display_options['tca_set_method'] == 'settings') {
+      $token_setting_key = 'tca.views.' . $view->name . '.' . $view->current_display . '.token';
+      $view_token = settings_get($token_setting_key);
+      if (is_null($view_token)) {
+        // $view_token = $display->display_options['tca_token'];
+        watchdog(
+          'Token Content Access',
+          t('Views display (@view_display) has been set to use a token defined in settings.php but the setting cannot be found.'),
+          array('@view_display' => $view->name . '.' . $view->current_display),
+          WATCHDOG_ERROR,
+          l(t('Edit the View Display'), 'admin/structure/views/view/' . $view->name . '/configure/' . $view->current_display)
+        );
+        return;
+      }
+    }
+    else {
+      $view_token = $display->display_options['tca_token'];
+    }
 
     // Get the TCA config for the flood control and parameter key settings.
     $tca_config = config_get('tca.settings');

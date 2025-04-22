@@ -87,12 +87,27 @@ class tca_views_plugin_display_extender extends views_plugin_display_extender {
         '#element_validate' => array('tca_parameter_key_validate'),
         '#required' => TRUE,
       );
+      // Show a warning about the possibility of the token being visible.
+      $markup = '<div class="messages warning">';
+      $markup .= t('Token Content Access settings for Views Protection is stored with the configuration of the View. If the configuration is stored in a public repository or could be exposed in another way, then you can choose to define the token in settings.php.');
+      $markup .= '</div>';
+      $form['tca_settings']['token_settings_warning'] = array(
+        '#type' => 'item',
+        '#markup' => $markup,
+        '#states' => array(
+          'visible' => array(
+            ':input[name="tca_views_protect"]' => array('checked' => TRUE),
+          ),
+        ),
+      );
+      // Choose the method of setting the token.
       $form['tca_settings']['tca_set_method'] = array(
         '#type' => 'radios',
         '#title' => t('Set your preference for how to add the token to the View'),
         '#options' => array(
           'manual' => t('Manually set the token.'),
           'generate' => t('Generate unique token.'),
+          'settings' => t('Set the token within settings.php.'),
         ),
         '#default_value' => $this->display->get_option('tca_set_method'),
         '#required' => TRUE,
@@ -115,12 +130,50 @@ class tca_views_plugin_display_extender extends views_plugin_display_extender {
         '#states' => array(
           'visible' => array(
             ':input[name="tca_views_protect"]' => array('checked' => TRUE),
+            ':input[name="tca_set_method"]' => array(
+              array('value' => 'manual'),
+              array('value' => 'generate'),
+            ),
           ),
           'required' => array(
             ':input[name="tca_set_method"]' => array('value' => 'manual'),
           ),
           'enabled' => array(
             ':input[name="tca_set_method"]' => array('value' => 'manual'),
+          ),
+        ),
+      );
+      // If token is set to be set in settings.php, check that and provide a
+      // useful message.
+      $token_setting_key = 'tca.views.' . $this->view->name . '.' . $this->view->current_display . '.token';
+      $token_setting = settings_get($token_setting_key);
+      $token_setting_exists = !is_null($token_setting);
+      $token_setting_validate = $token_setting_exists ? ($token_setting === urlencode($token_setting)) : FALSE;
+
+      $markup = '<div class="messages ' . ((!$token_setting_exists || !$token_setting_validate) ? 'warning' : 'info') . '">';
+      if ($token_setting_exists && $token_setting_validate) {
+        $markup .= t("The token has been set in settings.php to be '@token'.", array(
+          '@token' => $token_setting,
+        ));
+      }
+      elseif ($token_setting_exists && !$token_setting_validate) {
+        $markup .= t("The token has been set in settings.php but it is invalid.");
+        $markup .= t("Token must only contain alpha-numeric characters (a-z OR A-Z OR 0-9) or special characters that are acceptable for URL parameter values ( - OR _ ).");
+      }
+      else {
+        $markup .= t("The token needs to be set in settings.php using the following format:");
+        $markup .= '<pre class="php"><code>$settings' . "['$token_setting_key'] = 'a_valid_alpha-numeric_token_42';";
+        $markup .= '</code></pre>';
+        $markup .= t("Token must only contain alpha-numeric characters (a-z OR A-Z OR 0-9) or special characters that are acceptable for URL parameter values ( - OR _ ).");
+      }
+      $markup .= '</div>';
+      $form['tca_settings']['token_settings_message'] = array(
+        '#type' => 'item',
+        '#markup' => $markup,
+        '#states' => array(
+          'visible' => array(
+            ':input[name="tca_views_protect"]' => array('checked' => TRUE),
+            ':input[name="tca_set_method"]' => array('value' => 'settings'),
           ),
         ),
       );
@@ -136,6 +189,23 @@ class tca_views_plugin_display_extender extends views_plugin_display_extender {
     // Ensure that if manual is selected, then a token is entered.
     if (isset($form_values['tca_set_method']) && $form_values['tca_set_method'] == 'manual' && empty($form_values['tca_token'])) {
       form_set_error('tca_token', t('As you have selected to manually set the token, you must enter a token.'));
+    }
+    // Ensure that if setting is selected, that a valid token is defined in
+    // settings.php.
+    if (isset($form_values['tca_set_method']) && $form_values['tca_set_method'] == 'settings') {
+      $view = $form_state['view'];
+      $token_setting_key = 'tca.views.' . $view->name . '.' . $view->current_display . '.token';
+      $token_setting = settings_get($token_setting_key);
+      $token_setting_exists = !is_null($token_setting);
+      $token_setting_validate = $token_setting_exists ? ($token_setting === urlencode($token_setting)) : FALSE;
+      if (!$token_setting_exists) {
+        form_set_error('tca_set_method', t("The token needs to be set in settings.php"));
+      }
+      elseif ($token_setting_exists && !$token_setting_validate) {
+        $error_message = t("The token has been set in settings.php but it is invalid.");
+        $error_message .= ' ' . t("Token must only contain alpha-numeric characters (a-z OR A-Z OR 0-9) or special characters that are acceptable for URL parameter values ( - OR _ ).");
+        form_set_error('tca_set_method', $error_message);
+      }
     }
   }
 
@@ -163,6 +233,8 @@ class tca_views_plugin_display_extender extends views_plugin_display_extender {
               $display_id = $this->view->current_display;
               $token = backdrop_hmac_base64($view_id, $view_id . $display_id . microtime() . backdrop_get_private_key() . backdrop_get_hash_salt());
               break;
+            case 'settings':
+              $token = 'Token_defined_in_settings-dot-php';
           }
           $this->display->set_option('tca_token', $token);
         }

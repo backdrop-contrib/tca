@@ -957,8 +957,8 @@ function tca_get_token($entity_type, $entity, $value = '') {
 }
 
 /**
- * Validate the parameter key to ensure reserved key 'q' is not used and to
- * ensure that no characters are used that would be encoded by `urlencode()`.
+ * Validate the token to ensure that no characters are used that would be
+ * encoded by `urlencode()`.
  */
 function tca_manual_token_validate($element, &$form_state) {
   $value = (string) $element['#value'];
@@ -966,7 +966,6 @@ function tca_manual_token_validate($element, &$form_state) {
     form_error($element, t("Token must only contain alpha-numeric characters (a-z OR A-Z OR 0-9) or special characters that are acceptable for URL parameter values ( - OR _ )."));
   }
 }
-
 
 /**
  * Validate the parameter key to ensure reserved key 'q' is not used and to
