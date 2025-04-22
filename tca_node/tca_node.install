@@ -21,6 +21,45 @@ function tca_node_uninstall() {
 }
 
 /**
+ * Convert config from flat array to nested array to support more settings per
+ * content type; also add new permissions.
+ */
+function tca_node_update_1100() {
+  // Retrieve the existing config.
+  $config = config('tca_node.settings');
+  $original_config = $config->get();
+  $site_parameter_key = config_get('tca.settings', 'default_parameter_key') ?? 'tca';
+
+  // For each node type:
+  // - convert config from single 'active' value to array.
+  // - add the existing active setting if it exists; FALSE otherwise.
+  // - set new functionality 'forced' and 'override' to FALSE setting.
+  // - set new functionatity 'parameter_key' to the site default.
+  // - set the new config option.
+  // - define a bypass permission.
+  $node_types = node_type_get_names();
+  $permissions = array();
+  foreach ($node_types as $node_type) {
+    $new_config = array(
+      'active' => $original_config[$node_type] ?? FALSE,
+      'forced' => FALSE,
+      'override' => FALSE,
+      'parameter_key' => $site_parameter_key,
+    );
+    $config->set($node_type, $new_config);
+
+    $permissions['bypass tca_node ' . $node_type] = TRUE;
+  }
+
+  // Save the config.
+  $config->save();
+
+  // Add the permissions to the administrator role.
+  $admin_role = config_get('system.core', 'user_admin_role');
+  user_role_change_permissions($admin_role, $permissions);
+}
+
+/**
  * Upgrade from Drupal 7 to Backdrop CMS.
  */
 function tca_node_update_1000() {

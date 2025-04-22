@@ -28,8 +28,24 @@ function tca_node_tca() {
       'entity type' => 'node',
       'base table' => 'node',
       'view path' => 'node/%/view',
+      'override_methods' => TRUE,
     ),
   );
+}
+
+/**
+ * Implements hook_menu().
+ */
+function tca_node_menu() {
+  $items['tca_node_autocomplete'] = array(
+    'title' => 'TCA Node autocomplete',
+    'page callback' => 'tca_node_autocomplete',
+    'access callback' => 'user_access',
+    'access arguments' => array('administer tca_node'),
+    'type' => MENU_CALLBACK,
+    'file' => 'tca_node.module',
+  );
+  return $items;
 }
 
 /**
@@ -55,17 +71,23 @@ function tca_node_bundle_form_submit($form, &$form_state) {
   $type = $form_state['values']['type'];
 
   // Get the setting from the form.
-  $setting = (bool) $form_state['values']['tca_node_active'];
+  $setting = array(
+    'active' => (bool) $form_state['values']['tca_node_active'],
+    'forced' => (bool) $form_state['values']['tca_node_forced'],
+    'override' => (bool) $form_state['values']['tca_node_override'],
+    'parameter_key' => (string) $form_state['values']['tca_node_parameter_key'],
+  );
 
   // Get the existing config.
   $config = config('tca_node.settings');
-  $config_existing_setting = (bool) $config->get($type);
+  $config_existing_setting = $config->get($type);
 
   // If we are changing the setting from enabled to disabled then we should
   // also set all currently active nodes to be disabled and set the token to
   // NULL. While loading the page can check if the node type is enabled or not,
-  // it does not seem possible to do this in Views.
-  if ($config_existing_setting && !$setting) {
+  // it is possible to do this in Views as Views looks at the database and this
+  // setting is in config.
+  if (!is_null($config_existing_setting) && $config_existing_setting['active'] && !$setting['active']) {
     $query = new EntityFieldQuery;
     $results = $query->entityCondition('entity_type', 'node')
       ->entityCondition('bundle', $type)
@@ -84,8 +106,6 @@ function tca_node_bundle_form_submit($form, &$form_state) {
   // Add the setting for the node type to config.
   $config->set($type, $setting);
   $config->save();
-
-  // dpm($form);
 }
 
 /**
@@ -95,16 +115,393 @@ function tca_node_bundle_form_submit($form, &$form_state) {
  * able to override the default Token Content Access options.
  */
 function tca_node_form_node_form_alter(&$form, $form_state) {
+
+  // Get the node so we can easily use it.
+  $node = $form['#node'];
+
+  // Get the node type as we use more than once.
+  $node_type = $node->type;
+
   // Add the Token Content Access form, and add an extra javascript file that's
   // needed for the fieldset summary.
-  tca_form($form, $form_state, 'node', $form['#node']->type, 'tca_node', $form['#node']);
+  tca_form($form, $form_state, 'node', $node_type, 'tca_node', $node);
   $form['#attached']['js'][] = backdrop_get_path('module', 'tca_node') . '/js/tca_node.js';
+  // Only add additional fields if the bundle (content type) is active for TCA.
+  if (tca_get_active_bundle('node', $node_type)) {
+    // OVERRIDE TOKEN WITH TOKEN FROM EXISTING NODE.
+    // Add additional option of copying from existing node to the methods for
+    // overriding the token.
+    $form['tca']['token']['tca_override_select_method']['#options']['existing_node'] = t('Copy the token from an existing node.');
+
+    // Stores the status of the node search.
+    $form['tca']['token']['tca_override_existing_node_status'] = array(
+      '#type' => 'hidden',
+      '#value' => 1,
+      '#weight' => -19,
+    );
+    // Add an autocomplete node search field to be used if existing node is
+    // selected for override method.
+    // Adjust the description if the copy token operation has failed.
+    if ($form_state['values']['tca_override_existing_node_status'] ?? 1) {
+      $description = t('Start typing the title or Node ID and select a node from the list.');
+    }
+    else {
+      $description = t("Either the node doesn't exist or doesn't have a token. Ensure your search returns a result before copying.");
+    }
+    $form['tca']['token']['tca_override_existing_node'] = array(
+      '#title' => t('Search for existing content title or Node ID with a token.'),
+      '#description' => $description,
+      '#type' => 'textfield',
+      '#maxlength' => 512,
+      '#autocomplete_path' => 'tca_node_autocomplete',
+      '#states' => array(
+        'visible' => array(
+          ':input[name="tca_override_token"]' => array('checked' => TRUE),
+          ':input[name="tca_override_select_method"]' => array('value' => 'existing_node'),
+        ),
+      ),
+      '#weight' => -20,
+    );
+    // Add a button to copy the token from the selected node.
+    $form['tca']['token']['tca_override_existing_node_copy'] = array(
+      '#type' => 'submit',
+      '#value' => t('Copy token from selected node'),
+      '#submit' => array('tca_token_existing_node_copy'),
+      '#ajax' => array(
+        'callback' => 'tca_token_replace_callback',
+        'wrapper' => 'tca-token-form-entity',
+      ),
+      '#states' => array(
+        'disabled' => array(
+          ':input[name="tca_override_existing_node"]' => array('empty' => TRUE),
+        ),
+        'visible' => array(
+          ':input[name="tca_override_token"]' => array('checked' => TRUE),
+          ':input[name="tca_override_select_method"]' => array('value' => 'existing_node'),
+        ),
+      ),
+      '#weight' => -18,
+    );
+
+    // SET TOKEN TO SAME AS BOOK TOP LEVEL.
+    // If books are enabled, we should help the user to use one token for the
+    // whole book; this will make browsing the whole book simpler.
+    if (module_exists('book')) {
+      // Check if either the node type is within the allowed types for books
+      // or if the user has permission (via config and role) to add all types
+      // to book, and check that at least one book exists.
+      if ((book_type_is_allowed($node_type) || book_all_types_allowed()) && !empty(book_get_books())) {
+        // Check that this node is part of a book and isn't the book top level.
+        $book = $node->book;
+        if ($book['bid'] > 0 && $book['nid'] != $book['bid']) {
+          $book_nid = $book['bid'];
+          // Get the node ID of this node's parent so can check if the parent
+          // is the top of the book.
+          $parent_node_nid = db_select('book')
+            ->fields('book', array('nid'))
+            ->condition('mlid', $book['plid'])
+            ->execute()
+            ->fetchField();
+          $parent_is_book_top = $book_nid == $parent_node_nid;
+          // Add this check value to determine whether or not to allow
+          // selection of the level of the book to copy the token from.
+          $form['tca']['token']['tca_override_book_parent_is_book_top'] = array(
+            '#type' => 'hidden',
+            '#value' => $parent_is_book_top ? 1 : 0,
+            '#weight' => -15,
+          );
+          // Store both the parent node NID and the Book NID in the form so we
+          // can use them to get the token to copy from.
+          $form['tca']['token']['tca_override_book_parent_nid'] = array(
+            '#type' => 'value',
+            '#value' => $parent_node_nid,
+            '#weight' => -15,
+          );
+          $form['tca']['token']['tca_override_book_top_nid'] = array(
+            '#type' => 'value',
+            '#value' => $book_nid,
+            '#weight' => -15,
+          );
+
+          // Check that both nodes (if applicable) have tokens set.
+          $nids = array($book_nid);
+          if (!$parent_is_book_top) {
+            $nids[] = $parent_node_nid;
+          }
+          $result = db_select('node')
+            ->fields('node', array('nid', 'title', 'tca_active', 'tca_token'))
+            ->condition('nid', $nids, 'IN')
+            ->condition('tca_active', 1)
+            ->isNotNull('tca_token')
+            ->addTag('node_access')
+            // ->range(0, 10)
+            ->execute()
+            ->fetchAllAssoc('nid');
+          $node_checks = array();
+          foreach ($result as $key => $node) {
+            $node_checks[$node->nid] = array(
+              'title' => $node->title,
+              'tca_active' => $node->tca_active,
+              'tca_token' => $node->tca_token,
+            );
+          }
+
+          if (count($node_checks) > 0) {
+            // Add additional option of copying from the book node or the parent
+            // node.
+            $form['tca']['token']['tca_override_select_method']['#options']['book'] = t('Copy the token from the book');
+          }
+          $options = array();
+          if (isset($node_checks[$book_nid])) {
+            $options['book'] = t('Copy token from the Book top level.');
+          }
+          if (isset($node_checks[$parent_node_nid])) {
+            $options['parent'] = t('Copy token from the parent of this node in the Book.');
+          }
+          $book_ancestor_token_count = count($options);
+          $form['tca']['token']['tca_override_book_ancestor_token_count'] = array(
+            '#type' => 'hidden',
+            '#value' => $book_ancestor_token_count,
+            '#weight' => -15,
+          );
+          if ($book_ancestor_token_count == 1) {
+            $book_level_default = array_key_first($options);
+          }
+          else {
+            $book_level_default = 'book';
+          }
+          // If the node's parent is not the top of the book then allow to
+          // choose whether to copy the token from the parent link or from the
+          // top of the book. This will allow different chapters of a book to
+          // be made available separately.
+          if ($book_ancestor_token_count > 0) {
+            $form['tca']['token']['tca_override_book_level'] = array(
+              '#type' => 'radios',
+              '#title' => t('Select the level within the book to copy the token from.'),
+              '#options' => $options,
+              '#default_value' => $book_level_default,
+              '#states' => array(
+                'visible' => array(
+                  ':input[name="tca_override_token"]' => array('checked' => TRUE),
+                  ':input[name="tca_override_select_method"]' => array('value' => 'book'),
+                  ':input[name="tca_override_book_parent_is_book_top"]' => array('value' => 0),
+                  ':input[name="tca_override_book_ancestor_token_count"]' => array('value' => 2),
+                ),
+              ),
+              '#weight' => -14,
+            );
+            // Add a button to copy the token from the selected level of the
+            // book.
+            $form['tca']['token']['tca_override_book_copy'] = array(
+              '#type' => 'submit',
+              '#value' => t('Copy token from book'),
+              '#submit' => array('tca_token_book_copy'),
+              '#ajax' => array(
+                'callback' => 'tca_token_replace_callback',
+                'wrapper' => 'tca-token-form-entity',
+              ),
+              '#states' => array(
+                'visible' => array(
+                  ':input[name="tca_override_token"]' => array('checked' => TRUE),
+                  ':input[name="tca_override_select_method"]' => array('value' => 'book'),
+                ),
+              ),
+              '#weight' => -13,
+            );
+          }
+        }
+      }
+    }
+  }
 
   // Add a custom submit function. This is used to disable the redirect to
-  // node/123 if Token Content Access is enabled and the user doesn't have the
-  // bypass tca_node permission.
-  if (!user_access('bypass tca_node')) {
+  // node/123 if Token Content Access is enabled and the user doesn't have a
+  // bypass permission.
+  if (!tca_bypass_permission_exists('tca_node', $node_type)) {
     $form['actions']['submit']['#submit'][] = 'tca_node_node_form_submit';
+  }
+}
+
+/**
+ * Autocomplete callback for nodes by title.
+ *
+ * Searches for a node by title, but then identifies it by nid, so the actual
+ * returned value can be used later by the form.
+ *
+ * The returned $matches array has
+ * - key: The title, with the identifying nid in brackets, like "Some node
+ *   title [3325]"
+ * - value: the title which will is displayed in the autocomplete pulldown.
+ *
+ * Note that we must use a key style that can be parsed successfully and
+ * unambiguously. For example, if we might have node titles that could have
+ * [3325] in them, then we'd have to use a more restrictive token.
+ *
+ * This is a modified copy of node_autocomplete() that includes conditions to
+ * only include nodes that are activated for Token Content Access protection
+ * and have a token. It also supports searching in any part of the title, not
+ * just at the beginning.
+ *
+ * @param string $string
+ *   The string that will be searched.
+ *
+ * @see node_autocomplete()
+ */
+function tca_node_autocomplete($string = '') {
+  $matches = array();
+  if ($string) {
+    if (is_numeric($string)) {
+      // If user has entered a number search by Node ID. Only return nodes with
+      // active TCA protection and a token.
+      $result = db_select('node')
+        ->fields('node', array('nid', 'title'))
+        ->condition('nid', $string)
+        ->condition('tca_active', 1)
+        ->isNotNull('tca_token')
+        ->addTag('node_access')
+        ->execute();
+      foreach ($result as $node) {
+        $matches[$node->title . " [$node->nid]"] = check_plain($node->title) . ' [' .$node->nid . ']';
+      }
+    }
+    // Search for nodes by title. Only return nodes with active TCA protection
+    // and a token.
+    $result = db_select('node')
+      ->fields('node', array('nid', 'title'))
+      ->condition('title', '%' . db_like($string) . '%', 'LIKE')
+      ->condition('tca_active', 1)
+      ->isNotNull('tca_token')
+      ->addTag('node_access')
+      ->range(0, 10)
+      ->execute();
+    foreach ($result as $node) {
+      $matches[$node->title . " [$node->nid]"] = check_plain($node->title) . ' [' .$node->nid . ']';
+    }
+  }
+  backdrop_json_output($matches);
+}
+
+/**
+ * Node title validation handler.
+ * This is a slightly modified copy of node_autocomplete_validate().
+ *
+ * Validate handler to convert our string like "Some node title [3325]" into a
+ * nid.
+ *
+ * In case the user did not actually use the autocomplete or have a valid string
+ * there, we'll try to look up a result anyway giving it our best guess.
+ *
+ * Since the user chose a unique node, we must now use the same one in our
+ * submit handler, which means we need to look in the string for the nid.
+ *
+ * @param string $string
+ *   The string to validate.
+ * @return $nid
+ *   A node ID if matched, or NULL if no match.
+ *
+ * @see node_autocomplete_validate()
+ */
+function tca_node_autocomplete_validate($string) {
+  $matches = array();
+  $nid = 0;
+
+  // This preg_match() looks for the last pattern like [33334] and if found
+  // extracts the numeric portion.
+  $result = preg_match('/\[([0-9]+)\]$/', $string, $matches);
+  // If $result equals 1, we found a match.
+  if ($result == 1) {
+    // Get the first parenthesized match.
+    $nid = $matches[1];
+    // Verify that it's a valid nid and that the node has a token.
+    $node = node_load($nid);
+    if (empty($node) || is_null($node->tca_token)) {
+      return NULL;
+    }
+  }
+  // If the input was numeric, check that it matches a node.
+  elseif (is_numeric($string) && $node = node_load($string)) {
+    $nid = (int) $string;
+    // If the node doesn't have a token, return NULL.
+    if (is_null($node->tca_token)) {
+      return NULL;
+    }
+  }
+  // Check that the user may have directly entered a node title.
+  else {
+    $nid = db_select('node')
+      ->fields('node', array('nid'))
+      ->condition('title', db_like($string) . '%', 'LIKE')
+      ->condition('tca_active', 1)
+      ->isNotNull('tca_token')
+      ->addTag('node_access')
+      ->range(0, 1)
+      ->execute()
+      ->fetchField();
+  }
+
+  return (!empty($nid)) ? $nid : NULL;
+}
+
+/**
+ * Submit handler for the "Copy the token" button.
+ */
+function tca_token_existing_node_copy($form, &$form_state) {
+  // Get the string from the autocomplete field.
+  $node_search = $form_state['values']['tca_override_existing_node'];
+  // Attempt to retrieve the node ID from the string.
+  $nid = tca_node_autocomplete_validate($node_search);
+  if (!is_null($nid)) {
+    // If the Node ID can be retrieved then retrieve the token.
+    $token = db_select('node')
+      ->fields('node', array('tca_token'))
+      ->condition('nid', $nid)
+      ->isNotNull('tca_token')
+      ->execute()
+      ->fetchField();
+    // Set the token field.
+    $form_state['values']['tca_token'] = $token;
+    $form_state['values']['tca_override_existing_node_status'] = 1;
+    $form_state['rebuild'] = TRUE;
+  }
+  else {
+    // If the Node ID cannot be retrieved set the status so we can adjust the
+    // description.
+    $form_state['values']['tca_override_existing_node_status'] = 0;
+    $form_state['rebuild'] = TRUE;
+  }
+}
+
+/**
+ * Submit handler for the "Copy token from book" button.
+ */
+function tca_token_book_copy($form, &$form_state) {
+  $book_level = $form_state['values']['tca_override_book_level'];
+
+  // Retrieve the node ID from the correct node depending on the book level.
+  switch ($book_level) {
+    case 'book':
+      $nid = $form_state['values']['tca_override_book_top_nid'];
+      break;
+    case 'parent':
+      $nid = $form_state['values']['tca_override_book_parent_nid'];
+  }
+
+  if (!is_null($nid)) {
+    // If the Node ID can be retrieved then retrieve the token.
+    $token = db_select('node')
+      ->fields('node', array('tca_token'))
+      ->condition('nid', $nid)
+      ->isNotNull('tca_token')
+      ->execute()
+      ->fetchField();
+    // Set the token field.
+    $form_state['values']['tca_token'] = $token;
+    $form_state['values']['tca_override_book_status'] = 1;
+    $form_state['rebuild'] = TRUE;
+  }
+  else {
+    $form_state['values']['tca_override_book_status'] = 0;
+    $form_state['rebuild'] = TRUE;
   }
 }
 
@@ -139,7 +536,8 @@ function tca_node_node_view($node, $view_mode, $langcode) {
   // Execute Token Content Access, if the node is being viewed at its own page
   // using the full view mode, and the current user isn't able to override Token
   // Content Access.
-  if ($view_mode == 'full' && node_is_page($node) && !user_access('bypass tca_node')) {
+  $bypass_permission = tca_bypass_permission_exists('tca_node', $node->type);
+  if ($view_mode == 'full' && node_is_page($node) && !$bypass_permission) {
     tca_execute('node', $node);
   }
 }
@@ -153,9 +551,10 @@ function tca_node_node_insert($node) {
     db_update('node')->fields(array('tca_token' => $node->tca_token))->condition('nid', $node->nid)->execute();
 
     if (user_access('administer tca_node')) {
+      $parameter_key = tca_get_bundle_parameter_key('node', $node->type);
       $token_url = url('node/' . $node->nid, array(
         'absolute' => TRUE,
-        'query' => array('tca' => $node->tca_token),
+        'query' => array(check_plain($parameter_key) => check_plain($node->tca_token)),
       ));
       backdrop_set_message(t('URL to bypass Token Access Control for this item: @token', array('@token' => $token_url)));
     }
@@ -170,9 +569,10 @@ function tca_node_node_update($node) {
   if ((tca_get_active_entity('node', $node))) {
 
     if (user_access('administer tca_node')) {
+      $parameter_key = tca_get_bundle_parameter_key('node', $node->type);
       $token_url = url('node/' . $node->nid, array(
         'absolute' => TRUE,
-        'query' => array('tca' => $node->tca_token),
+        'query' => array(check_plain($parameter_key) => check_plain($node->tca_token)),
       ));
       backdrop_set_message(t('URL to bypass Token Access Control for this item: @token', array('@token' => $token_url)));
     }
@@ -220,5 +620,194 @@ function tca_node_apachesolr_exclude($entity_id, $entity_type, $row, $env_id) {
     }
 
     return FALSE;
+  }
+}
+
+/**
+ * Implements hook_vboaction_info().
+ */
+function tca_node_vboaction_info() {
+  $actions = array();
+  // Action to add TCA protection to nodes.
+  $actions['tca_node_add_tca_vboaction'] = array(
+    'type' => 'node',
+    'label' => t('Add Token Content Access to Nodes'),
+    'configurable' => TRUE,
+    'behavior' => array('changes_property'),
+    'vbo' => TRUE,
+  );
+  // Action to remove TCA protection from nodes.
+  $actions['tca_node_remove_tca_vboaction'] = array(
+    'type' => 'node',
+    'label' => t('Remove Token Content Access from nodes'),
+    'configurable' => FALSE,
+    'behavior' => array('changes_property'),
+    'vbo' => TRUE,
+  );
+  // If the submodule Action Permissions (VBO) is not enabled then apply the
+  // TCA Node permission to the actions.
+  if (!module_exists('actions_permissions')) {
+    $actions['tca_node_add_tca_vboaction']['permissions'] = array('administer tca_node');
+    $actions['tca_node_remove_tca_vboaction']['permissions'] = array('administer tca_node');
+  }
+  return $actions;
+}
+
+/**
+ * Define tca_node_add_tca_vboaction form.
+ */
+function tca_node_add_tca_vboaction_form($context) {
+  $form = array();
+  $form['tca'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Add Token Content Access to Nodes'),
+  );
+  $form['tca']['token_set_method'] = array(
+    '#type' => 'radios',
+    '#title' => t('Set your preference for how to add tokens to each node'),
+    '#description' => t("If you select manual, then the entered token will be used for all nodes where the content type allows tokens to be overridden; where overriding is not allowed, the token will be generated in the standard way."),
+    '#options' => array(
+      'manual' => t('Manually set the token on all nodes.'),
+      'generate' => t('Generate unique tokens for each node.'),
+    ),
+    '#required' => TRUE,
+  );
+  $form['tca']['tca_token'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Enter a token'),
+    '#states' => array(
+      'visible' => array(
+        ':input[name="token_set_method"]' => array('value' => 'manual'),
+      ),
+      'required' => array(
+        ':input[name="token_set_method"]' => array('value' => 'manual'),
+      ),
+    ),
+  );
+  return $form;
+}
+
+/**
+ * Validate tca_node_add_tca_vboaction form submissions
+ */
+function tca_node_add_tca_vboaction_validate($form, $form_state) {
+  $form_values = $form_state['values'];
+  // Ensure that if manual is selected, then a token is entered.
+  if ($form_values['token_set_method'] == 'manual' && empty($form_values['tca_token'])) {
+    form_set_error('tca_token', t('As you have selected to manually set the token, you must enter a token.'));
+  }
+}
+
+/**
+ * Process tca_node_add_tca_vboaction form submissions.
+ */
+function tca_node_add_tca_vboaction_submit($form, $form_state) {
+  $form_values = array(
+    'tca_token_set_method' => $form_state['values']['token_set_method'],
+    'tca_token' => $form_state['values']['tca_token'] ?? NULL,
+  );
+  return $form_values;
+}
+
+/**
+ * Adds Token Content Access protection to the selected nodes.
+ */
+function tca_node_add_tca_vboaction($node, $context = array()) {
+  // Retrieve the config once for the operation.
+  $tca_node_config = &backdrop_static(__FUNCTION__);
+
+  if (!isset($tca_node_config)) {
+    $tca_node_config = config_get('tca_node.settings');
+  }
+
+  // Check if the node type is enabled for TCA Node.
+  $node_type = $node->type;
+  $node_type_name = node_type_get_type($node_type)->name;
+  $enabled = (bool) isset($tca_node_config[$node_type]) ? $tca_node_config[$node_type]['active'] : FALSE;
+  if ($enabled) {
+    // If enabled then check the token set method.
+    switch ($context['tca_token_set_method']) {
+      case 'manual':
+        $override = $tca_node_config[$node_type]['override'] ?? FALSE;
+        if ($override) {
+          // If manual and override is enabled then set token from token field.
+          $token = $context['tca_token'];
+          $message = t('Token Content Access was set for !title (!node_type) using the manual token you specified.', array(
+            '!title' => $node->title,
+            '!node_type' => $node_type_name,
+          ));
+          break;
+        }
+        // If manual but override is NOT enabled then proceed to generate token.
+        $message = t('Token Content Access was set for !title (!node_type) but using a unique generated token rather than the manual token you specified, as overrides are not enabled for !node_type content.', array(
+          '!title' => $node->title,
+          '!node_type' => $node_type_name,
+        ));
+      case 'generate':
+        $token = tca_get_token('node', $node);
+        $message = t('Token Content Access was set for !title (!node_type) using a unique generated token.', array(
+          '!title' => $node->title,
+          '!node_type' => $node_type_name,
+        ));
+    }
+    // Set the node properties and set a success message.
+    $node->tca_active = TRUE;
+    $node->tca_token = $token;
+    backdrop_set_message($message, 'status');
+  }
+  else {
+    // If the node type is not enabled for TCA Node, set an error message.
+    backdrop_set_message(t('Token Content Access could not be set for !title because TCA Node is not enabled for the !node_type content type.', array(
+      '!title' => check_plain($node->title),
+      '!node_type' => $node_type_name,
+    )), 'error');
+  }
+  // Remove duplicate "Reorder book pages..." messages. If the last node
+  // processed is also a book page, this will result in two which is still
+  // better than one for every book page.
+  $_SESSION['messages']['status'] = array_unique($_SESSION['messages']['status']);
+}
+
+/**
+ * Removes Token Content Access protection from the selected nodes.
+ */
+function tca_node_remove_tca_vboaction($node, $context = array()) {
+  // Retrieve the config once for the operation.
+  $tca_node_config = &backdrop_static(__FUNCTION__);
+  if (!isset($tca_node_config)) {
+    $tca_node_config = config_get('tca_node.settings');
+  }
+
+  // Check if the node type is enabled for TCA Node.
+  $node_type = $node->type;
+  $node_type_name = node_type_get_type($node_type)->name;
+  $enabled = (bool) isset($tca_node_config[$node_type]) ? $tca_node_config[$node_type]['active'] : FALSE;
+
+  if ($enabled) {
+    // If enabled then check if TCA is active for the Node.
+    if ($node->tca_active) {
+      // If node is currently active, set inactive, set the token to NULL and
+      // set a success message.
+      $node->tca_active = FALSE;
+      $node->tca_token = NULL;
+      backdrop_set_message(t('Token Content Access was successfully removed from !title (!node_type).', array(
+        '!title' => check_plain($node->title),
+        '!node_type' => $node_type_name,
+      )), 'status');
+    }
+    else {
+      // If the node was already inactive, set a warning message.
+      backdrop_set_message(t('Token Content Access was already inactive on !title (!node_type).', array(
+        '!title' => check_plain($node->title),
+        '!node_type' => $node_type_name,
+      )), 'warning');
+    }
+  }
+  else {
+    // If the node type is NOT enabled for TCA Node, set an error message.
+    backdrop_set_message(t('Token Content Access could not be removed for !title because TCA Node is not enabled for !node_type content.', array(
+      '!title' => check_plain($node->title),
+      '!node_type' => $node_type_name,
+    )), 'error');
   }
 }

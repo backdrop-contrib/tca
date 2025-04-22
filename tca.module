@@ -46,7 +46,6 @@ function tca_schema_fields() {
   return $fields;
 }
 
-
 /**
  * Implements hook_modules_enabled().
  */
@@ -69,10 +68,12 @@ function tca_modules_enabled($modules) {
           db_add_field($entity_info['base table'], $name, $spec);
         }
       }
+
+      // Ensure permissions are added to admin role.
+      user_modules_installed($module);
     }
   }
 }
-
 
 /**
  * Implements hook_modules_uninstalled().
@@ -107,18 +108,36 @@ function tca_modules_uninstalled($modules) {
   }
 }
 
-
 /**
  * Implements hook_permission().
  */
 function tca_permission() {
   $permissions = array();
 
+  // Add an administer permission for global TCA settings.
+  $permissions['administer tca'] = array(
+    'title' => t('Administer Token Content Access global settings'),
+  );
+
+  // Add an administer permission for Views Protection.
+  $permissions['administer tca views protect'] = array(
+    'title' => t('Administer Token Content Access Views Protection'),
+    'description' => t('Allows user to add or remove the protection for Views'),
+    'restrict access' => TRUE,
+  );
+
+  // Add a bypass permission for Views Protection.
+  $permissions['bypass tca views protect'] = array(
+    'title' => t('Bypass Token Content Access Views Protection'),
+    'description' => t('Allows user to bypass the protection that has been configured for Views'),
+  );
+
   // Load information from any module that implements hook_tca().
   $modules = module_invoke_all('tca');
   foreach ($modules as $module => $info) {
     // Get information about the entity.
-    $entity_info = entity_get_info($info['entity type']);
+    $entity_type = $info['entity type'];
+    $entity_info = entity_get_info($entity_type);
     $entity_label = strtolower(isset($entity_info['plural label']) ? $entity_info['plural label'] : $entity_info['label']);
 
     // Add an administer permission.
@@ -126,16 +145,112 @@ function tca_permission() {
       'title' => t('Administer Token Content Access settings for @entity_type', array('@entity_type' => $entity_label)),
     );
 
-    // Add a bypass permission.
+    // Add a bypass permission for the entity type.
     $permissions['bypass ' . $module] = array(
       'title' => t('Bypass Token Content Access action for @entity_type', array('@entity_type' => $entity_label)),
       'description' => t('Allows user to bypass the action that has been configured for @entity_type.', array('@entity_type' => $entity_label)),
       'restrict access' => TRUE,
     );
+    // If the entity type supports bundles and more than one bundle exists, add
+    // a bypass permission for each bundle.
+    $bundles = $entity_info['bundles'];
+    // The 'bundle keys' property appears in entity info that supports bundles
+    // e.g. 'node', 'file' but not 'user' so appears to be a reliable indicator
+    // of whether an entity supports bundles or not.
+    if (isset($entity_info['bundle keys']) && count($bundles) > 1) {
+      foreach ($bundles as $bundle_name => $bundle) {
+        $bundle_label = $bundle['label'];
+        // $config = tca_get_active_bundle('')
+        $permissions['bypass ' . $module . ' ' . $bundle_name] = array(
+          'title' => t('Bypass Token Content Access action for @bundle_label @entity_type', array(
+            '@entity_type' => $entity_label,
+            '@bundle_label' => $bundle_label,
+          )),
+          'description' => t('Allows user to bypass the action that has been configured for @bundle_label @entity_type', array(
+            '@entity_type' => $entity_label,
+            '@bundle_label' => $bundle_label,
+          )),
+        );
+      }
+    }
   }
 
   if (!empty($permissions)) {
     return $permissions;
+  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function tca_menu() {
+  $items = array();
+  $items['admin/config/content/token-content-access'] = array(
+    'title' => 'Token Content Access Global Settings',
+    'description' => 'Enter global settings for the Token Content Access module',
+    'page callback' => 'backdrop_get_form',
+    'page arguments' => array('tca_config_form'),
+    'access arguments' => array('administer tca'),
+    'file' => 'tca.admin.inc',
+    'type' => MENU_NORMAL_ITEM,
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_config_info().
+ */
+function tca_config_info() {
+  $config = array(
+    'tca.settings' => array(
+      'label' => t('Token Content Access settings'),
+      'group' => t('Configuration'),
+    ),
+  );
+  return $config;
+}
+
+/**
+ * Checks if bypass permission exists.
+ *
+ * @param string $module
+ *   The module being checked.
+ * @param string $bundle
+ *   The bundle to check.
+ *
+ * @return boolean
+ *   Returns TRUE if bypass permission exists, false otherwise.
+ */
+function tca_bypass_permission_exists($module, $bundle) {
+  // Check for module level bypass permission.
+  $module_bypass = user_access('bypass ' . $module);
+  // Check for bundle level permission.
+  $bundle_bypass = user_access('bypass ' . $module . ' ' . $bundle);
+  if ($module_bypass || $bundle_bypass) {
+    return TRUE;
+  }
+  else {
+    return FALSE;
+  }
+}
+
+/**
+ * Get the info for the module that implements hook_tca().
+ *
+ * @param string $module_name
+ *   The module name e.g. 'tca_node'.
+ *
+ * @return array|NULL
+ *   The module information or NULL if function doesn't exist.
+ */
+function tca_get_module_info($module_name) {
+  $function = $module_name . '_tca';
+  if (function_exists($function)) {
+    $module_info = $function()[$module_name];
+    return $module_info;
+  }
+  else {
+    return NULL;
   }
 }
 
@@ -208,6 +323,7 @@ function tca_menu_local_tasks_alter(&$data, $router_item, $root_path) {
  *   the form is being attached to the bundle configuration form.
  */
 function tca_form(array &$attach, $form_state, $entity_type, $bundle, $module, $entity = NULL) {
+  // Check that the user has permission to access this TCA form.
   if (!user_access('administer ' . $module)) {
     // The user doesn't have access, exit.
     return;
@@ -225,7 +341,15 @@ function tca_form(array &$attach, $form_state, $entity_type, $bundle, $module, $
 
   // Get the label for the bundle. This won't be set when the user is creating a
   // new bundle. In that case, fallback to "this bundle".
-  $bundle_label = isset($entity_info['bundles'][$bundle]['label']) ? $entity_info['bundles'][$bundle]['label'] : 'this bundle';
+  $bundle_label = isset($entity_info['bundles'][$bundle]['label']) ? $entity_info['bundles'][$bundle]['label'] : 'this type of ';
+
+  // Get the 'forced' status for the entity type and bundle.
+  $forced_bundle = !empty($bundle) ? tca_get_forced_bundle($entity_type, $bundle) : FALSE;
+
+  // Get the 'override status for the entity type and bundle.
+  $override_bundle = !empty($bundle) ? tca_get_override_bundle($entity_type, $bundle) : FALSE;
+  $module_info = tca_get_module_info($module);
+  $override_methods = is_null($module_info) ? FALSE : $module_info['override_methods'] ?? FALSE;
 
   // Wrap everything in a fieldset.
   $form['tca'] = array(
@@ -249,89 +373,245 @@ function tca_form(array &$attach, $form_state, $entity_type, $bundle, $module, $
     '#value' => $entity_type,
   );
 
-  // Add override setting if we're editing a bundle.
+  // Add type settings if we're editing a bundle.
   if (!isset($entity)) {
     $form['tca']['tca_' . $entity_type . '_active'] = array(
       '#type' => 'checkbox',
       '#title' => t('Enable Token Content Access protection.'),
       '#default_value' => !empty($bundle) ? tca_get_active_bundle($entity_type, $bundle) : FALSE,
       '#description' => t('If this is checked, users with the %permission permission will be able to enable Token Content Access protection for individual entities.', array('%permission' => t('Administer Token Content Access settings for @entity_type', array('@entity_type' => $entity_label)))),
+      '#weight' => -25,
+    );
+    $form['tca']['tca_' . $entity_type . '_forced'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Enforce Token usage'),
+      '#default_value' => $forced_bundle,
+      '#description' => t('Enforce usage of Tokens on @bundle_label @entity_label', array(
+        '@entity_label' => $entity_label,
+        '@bundle_label' => $bundle_label,
+      )),
+      '#states' => array(
+        'visible' => array(
+          ':input[name="tca_' . $entity_type . '_active"]' => ['checked' => TRUE],
+        ),
+      ),
+      '#weight' => 10,
+    );
+    $form['tca']['tca_' . $entity_type . '_override'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Allow token to be overridden'),
+      '#default_value' => $override_bundle,
+      '#description' => t('Allow tokens to be overridden on @bundle_label @entity_label. This will allow a token to be typed or pasted in, or retrieved from another @entity_label.', array(
+        '@entity_label' => $entity_label,
+        '@bundle_label' => $bundle_label,
+      )),
+      '#states' => array(
+        'visible' => array(
+          ':input[name="tca_' . $entity_type . '_active"]' => ['checked' => TRUE],
+        ),
+      ),
+      '#weight' => 20,
+    );
+    $bundle_parameter_key = tca_get_bundle_parameter_key($entity_type, $bundle);
+    $form['tca']['tca_' . $entity_type . '_parameter_key'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Set the default parameter key for @bundle_label @entity_label.', array(
+        '@entity_label' => $entity_label,
+        '@bundle_label' => $bundle_label,
+      )),
+      '#default_value' => $bundle_parameter_key,
+      '#description' => t("The default URL parameter key for your site is '@parameter_key'. You could change it to provide a better fit with the use case for @bundle_label @entity_label or to make it harder for any brute force attempts.", array(
+        '@parameter_key' => $bundle_parameter_key,
+        '@entity_label' => $entity_label,
+        '@bundle_label' => $bundle_label,
+      )),
+      '#element_validate' => array('tca_parameter_key_validate'),
+      '#states' => array(
+        'visible' => array(
+          ':input[name="tca_' . $entity_type . '_active"]' => ['checked' => TRUE],
+        ),
+      ),
+      '#weight' => 30,
     );
   }
 
   // Add Token activation if we're editing a new or existing entity.
   if (isset($entity)) {
+    $active = isset($entity) ? tca_get_active_entity($entity_type, $entity) : FALSE;
     // Add activation settings.
     $form['tca']['tca_active'] = array(
       '#type' => 'checkbox',
       '#title' => t('Enable Token Content Access protection.'),
-      '#default_value' => isset($entity) ? tca_get_active_entity($entity_type, $entity) : FALSE,
-      '#description' => t('Prevent users from viewing an this @bundle page w/o providing an access token via the URL.', array('@bundle' => strtolower(isset($entity_info['plural label']) ? $entity_info['plural label'] : $bundle_label))),
+      '#default_value' => $forced_bundle ? TRUE : $active,
+      '#description' => t('Prevent users from viewing this @bundle page without providing an access token via the URL.', array('@bundle' => strtolower(isset($entity_info['plural label']) ? $entity_info['plural label'] : $bundle_label))),
       '#attributes' => array('class' => array('tca-active-setting')),
+      '#disabled' => $forced_bundle,
+      '#weight' => -25,
     );
 
-    // Only populate token information if we are editing an existing entity.
+    // Entity Status.
+    // Only populate token information if we are editing an existing entity,
+    // except if we are overriding the token.
     list($entity_id, $revision_id, $bundle) = entity_extract_ids($entity_type, $entity);
-    if ($entity_id) {
-      // Wrap the token settings in a fieldset.
-      $form['tca']['token'] = array(
-        '#prefix' => '<div id="tca-token-form-entity">',
-        '#suffix' => '</div>',
-        '#type' => 'fieldset',
-        '#title' => t('Token settings'),
-        '#description' => t('Token settings'),
-        '#attributes' => array('class' => array('tca-redirect-options')),
-        '#states' => array(
-          'visible' => array(
-            ':input[name="tca_active"]' => array('checked' => TRUE),
-          ),
-        ),
-      );
+    $entity_status = (bool) isset($entity_id);
 
-      if (!isset($form_state['values']['tca_token'])) {
+    $bundle_parameter_key = tca_get_bundle_parameter_key($entity_type, $bundle);;
+
+    $form['tca']['entity_status'] = array(
+      '#type' => 'hidden',
+      '#value' => $entity_status ? 1 : 0,
+      '#weight' => -50,
+    );
+
+    // The module has additional override methods defined.
+    $form['tca']['show_token_fieldset_if_active'] = array(
+      '#type' => 'hidden',
+      '#value' => ($entity_status || $override_bundle) ? 1 : 0,
+      '#weight' => -50,
+    );
+
+    // Wrap the token settings in a fieldset.
+    $form['tca']['token'] = array(
+      '#prefix' => '<div id="tca-token-form-entity">',
+      '#suffix' => '</div>',
+      '#type' => 'fieldset',
+      '#title' => t('Token settings'),
+      '#attributes' => array('class' => array('tca-redirect-options')),
+      '#states' => array(
+        'visible' => array(
+          ':input[name="tca_active"]' => array('checked' => TRUE),
+          ':input[name="show_token_fieldset_if_active"]' => array('value' => 1),
+        ),
+      ),
+      '#weight' => 0,
+    );
+
+    // Override token options.
+    // Store some hidden values from variables to define visibility and other
+    // states.
+    // Override is enabled for the entity bundle.
+    $form['tca']['token']['tca_override_bundle'] = array(
+      '#type' => 'hidden',
+      '#value' => $override_bundle ? 1 : 0,
+      '#weight' => -50,
+    );
+
+    // If overrides are enabled for the entity bundle, then give the option
+    // to override for this entity.
+    $form['tca']['token']['tca_override_token'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Override the Access Token'),
+      '#default_value' => FALSE,
+      '#states' => array(
+        'visible' => array(
+          ':input[name="tca_override_bundle"]' => array('value' => 1),
+        ),
+      ),
+      '#weight' => -40,
+    );
+
+    // The module has additional override methods defined.
+    $form['tca']['token']['tca_override_methods'] = array(
+      '#type' => 'hidden',
+      '#value' => $override_methods ? 1 : 0,
+      '#weight' => -50,
+    );
+
+    // If override is enabled for this entity and the module has defined
+    // addional override methods, then allow to select the method. Manual is
+    // the default value so if no other methods are defined, the token can be
+    // edited manually.
+    $form['tca']['token']['tca_override_select_method'] = array(
+      '#type' => 'radios',
+      '#title' => t('Select the method for overriding the token'),
+      '#options' => array(
+        'manual' => t('Manually set the token'),
+      ),
+      '#default_value' => 'manual',
+      '#states' => array(
+        'visible' => array(
+          ':input[name="tca_override_token"]' => array('checked' => TRUE),
+          ':input[name="tca_override_methods"]' => array('value' => 1),
+        ),
+      ),
+      '#weight' => -30,
+    );
+
+    // Retrieve the token if it exists or generate otherwise.
+    if (!isset($form_state['values']['tca_token'])) {
+      $token = tca_get_token_entity($entity_type, $entity);
+      if (!empty($token)) {
         $token = tca_get_token_entity($entity_type, $entity);
-        if (!empty($token)) {
-          $token = tca_get_token_entity($entity_type, $entity);
-        }
-        else {
-          $token = tca_get_token($entity_type, $entity, $value = '');
-        }
       }
       else {
-        $token = $form_state['values']['tca_token'];
+        $token = tca_get_token($entity_type, $entity, $value = '');
       }
-
-      $entity_uri = (entity_uri($entity_type, $entity));
-      $description = array();
-      $description[] = t('Append this access token to the URL as the value for the "tca" query parameter, for example:');
-      $url_options = array(
-        'absolute' => TRUE,
-        'query' => array('tca' => $token),
-      );
-      $description[] = '<pre>' . url($entity_uri['path'], $url_options) . '</pre>';
-      $form['tca']['token']['tca_token'] = array(
-        '#type' => 'textfield',
-        '#title' => t('Access Token'),
-        '#default_value' => $token,
-        '#description' => '<p>' . implode('</p><p>', $description) . '</p>',
-        '#disabled' => TRUE,
-        '#attributes' => array(
-          'class' => array('tca-access-token'),
-        ),
-      );
-      // Add replace token functionality.
-      $form['tca']['tca_token_replace'] = array(
-        '#type' => 'submit',
-        '#value' => t('Regenerate Token'),
-        '#description' => t('Generate a new token.'),
-        '#submit' => array('tca_token_replace'),
-        '#ajax' => array(
-          'callback' => 'tca_token_replace_callback',
-          'wrapper' => 'tca-token-form-entity',
-        ),
-      );
-
     }
+    else {
+      $token = $form_state['values']['tca_token'];
+    }
+
+    // Get the URI for the entity to provide the basis for a link.
+    $entity_uri = (entity_uri($entity_type, $entity));
+
+    // Compile the description for the token including a link with token.
+    $description = array();
+    $description[] = t('Append this access token to the URL as the value for the "@parameter_key" query parameter, for example:', array(
+      '@parameter_key' => $bundle_parameter_key,
+    ));
+    $url_options = array(
+      'absolute' => TRUE,
+      'query' => array($bundle_parameter_key => $token),
+    );
+    $description[] = '<pre>' . url($entity_uri['path'], $url_options) . '</pre>';
+
+    // The token field.
+    // Enable if override is TRUE and method is manual.
+    // Hide if entity is new AND not overriding the token.
+    $form['tca']['token']['tca_token'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Access Token'),
+      '#default_value' => $token,
+      '#description' => '<p>' . implode('</p><p>', $description) . '</p>',
+      '#element_validate' => array('tca_manual_token_validate'),
+      '#attributes' => array(
+        'class' => array('tca-access-token'),
+      ),
+      '#states' => array(
+        'enabled' => array(
+          ':input[name="tca_override_token"]' => array('checked' => TRUE),
+          ':input[name="tca_override_select_method"]' => array('value' => 'manual'),
+        ),
+        'invisible' => array(
+          ':input[name="tca_override_token"]' => array('checked' => FALSE),
+          ':input[name="entity_status"]' => array('value' => 0),
+        ),
+      ),
+      '#weight' => 0,
+    );
+
+    // Add replace token functionality.
+    // Hide if entity is new OR TCA is not active.
+    $form['tca']['tca_token_replace'] = array(
+      '#type' => 'submit',
+      '#value' => t('Regenerate Token'),
+      '#description' => t('Generate a new token.'),
+      '#submit' => array('tca_token_replace'),
+      '#ajax' => array(
+        'callback' => 'tca_token_replace_callback',
+        'wrapper' => 'tca-token-form-entity',
+      ),
+      '#states' => array(
+        'enabled' => array(
+          ':input[name="entity_status"]' => array('value' => 1),
+        ),
+        'invisible' => array(
+          [':input[name="entity_status"]' => array('value' => 0)],
+          [':input[name="tca_active"]' => array('checked' => FALSE)],
+        ),
+      ),
+      '#weight' => 25,
+    );
   }
 
   // Attach the Token Content Access form to the main form, and add a custom
@@ -346,19 +626,19 @@ function tca_form(array &$attach, $form_state, $entity_type, $bundle, $module, $
   if (function_exists($submit_function) && !isset($entity)) {
     $attach['#submit'][] = $submit_function;
   }
-
+  // Add a general submit function. At present, all it does is set the token to
+  // NULL if TCA is inactive.
+  $attach['#submit'][] = 'tca_form_submit';
 }
-
 
 /**
  * Callback for "Regenerate Token" button.
  *
- * Selects and returns the fieldset with the token up in it.
+ * Selects and returns the fieldset with the token in it.
  */
 function tca_token_replace_callback(&$form, &$form_state) {
   return $form['tca']['token'];
 }
-
 
 /**
  * Submit handler for the "Regenerate Token" button.
@@ -377,6 +657,52 @@ function tca_form_validate($form, &$form_state) {
 
 }
 
+/**
+ * Custom submit function for entity forms.
+ *
+ * This will ensure that the token is set to NULL if the TCA protection is
+ * deactivated.
+ */
+function tca_form_submit($form, &$form_state) {
+  // Check if TCA is active or not.
+  $active = $form_state['values']['tca_active'] ?? 0;
+  // Check if the entity is existing or not. If this is a bundle form or the
+  // entity is new then token won't be set anyway.
+  $existing_entity = $form_state['values']['entity_status'] ?? 0;
+
+  // If TCA has been set to inactive and this is an existing entity, ensure the
+  // token is set to NULL. This ensures that if it is re-activated, then a new
+  // token will be generated.
+  if (!$active && $existing_entity) {
+    $form_state['values']['tca_token'] = NULL;
+  }
+}
+
+/**
+ * Gets the Token Content Access parameter key for a bundle or entity.
+ *
+ * @param string $entity_type
+ *   The entity type of the bundle.
+ * @param string|NULL $bundle
+ *   Optional parameter - the bundle that we're checking. The $bundle will be
+ *   empty for new bundles.
+ *
+ * @return string
+ *   Either the site default parameter key or the bundle parameter key.
+ */
+function tca_get_bundle_parameter_key($entity_type, $bundle = NULL) {
+  $site_default_parameter_key = config_get('tca.settings', 'default_parameter_key');
+  if (empty($bundle)) {
+    $bundle_parameter_key = $site_default_parameter_key;
+  }
+  else {
+    $bundle_parameter_key = config_get("tca_$entity_type.settings", "$bundle.parameter_key");
+    if (empty($bundle_parameter_key)) {
+      $bundle_parameter_key = $site_default_parameter_key;
+    }
+  }
+  return $bundle_parameter_key;
+}
 
 /**
  * Gets the Token Content Access active state for a bundle.
@@ -392,7 +718,41 @@ function tca_form_validate($form, &$form_state) {
  */
 function tca_get_active_bundle($entity_type, $bundle) {
   $setting = config_get('tca_' . $entity_type . '.settings', $bundle);
-  return $setting;
+  return $setting['active'] ?? FALSE;
+}
+
+/**
+ * Gets the Token Content Access forced status for a bundle.
+ *
+ * @param string $entity_type
+ *   The entity type of the bundle.
+ * @param string $bundle
+ *   The bundle that we're checking.
+ *
+ * @return bool
+ *   TRUE or FALSE depending on whether or not Token Content Access
+ *   is enforced for this bundle
+ */
+function tca_get_forced_bundle($entity_type, $bundle) {
+  $setting = config_get('tca_' . $entity_type . '.settings', $bundle);
+  return $setting['forced'] ?? FALSE;
+}
+
+/**
+ * Gets the Token Content Access override status for a bundle.
+ *
+ * @param string $entity_type
+ *   The entity type of the bundle.
+ * @param string $bundle
+ *   The bundle that we're checking.
+ *
+ * @return bool
+ *   TRUE or FALSE depending on whether or not the Token can be overridden for
+ *   this bundle.
+ */
+function tca_get_override_bundle($entity_type, $bundle) {
+  $setting = config_get('tca_' . $entity_type . '.settings', $bundle);
+  return $setting['override'] ?? FALSE;
 }
 
 /**
@@ -426,7 +786,6 @@ function tca_get_token_entity($entity_type, $entity) {
   return isset($entity->tca_token) ? $entity->tca_token : FALSE;
 }
 
-
 /**
  * Gets the bundle of an entity.
  *
@@ -440,10 +799,9 @@ function tca_get_token_entity($entity_type, $entity) {
  */
 function tca_entity_get_bundle($entity_type, $entity) {
   $entity_info = entity_get_info($entity_type);
-
   // Use the bundle key to get the bundle for this entity if the bundle key has
   // been defined. If it hasn't, it means that this entity only provides one
-  // bundle, and that bundle will always have the same name as the entoty type.
+  // bundle, and that bundle will always have the same name as the entity type.
   // E.g, the user entity is built by one bundle, and that bundle is also called
   // user.
   //
@@ -466,31 +824,114 @@ function tca_execute($entity_type, $entity) {
   // First get and check if the bundle is active.
   $bundle = tca_entity_get_bundle($entity_type, $entity);
   $active_bundle = tca_get_active_bundle($entity_type, $bundle);
-  // Make sure Token Content Access is enabled for this entity.
-  if ($active_bundle && tca_get_active_entity($entity_type, $entity)) {
+  // Check if Token Content Access is enabled for this entity and the token is
+  // set.
+  $active_entity = tca_get_active_entity($entity_type, $entity);
+  // Get the token value for this entity.
+  $token = tca_get_token_entity($entity_type, $entity);
+  $token_set = !empty($token);
+
+  // Check that all entity conditions are met before proceeding.
+  if ($active_bundle && $active_entity && $token_set) {
     // Get query parameters.
     $query = backdrop_get_query_parameters();
-    // Get the token value for this entity.
-    $token = tca_get_token_entity($entity_type, $entity);
-    // Check to see that a token was provided via the URL and that this node has
-    // a token set and check to see if these values match.
-    if (isset($query['tca']) && !empty($token) && $query['tca'] == $token) {
-      // Proceed with viewing the entity.
-      return;
+
+    // Get the TCA config for the flood control settings.
+    $tca_config = config_get('tca.settings');
+    $flood_control_active = (bool) $tca_config['flood_control_active'];
+    // If flood control is active, then check if either of the limits have been
+    // reached.
+    if ($flood_control_active) {
+      $flood_allowed_ip = flood_is_allowed('tca_failed_authentication_attempt_ip', $tca_config['flood_ip_limit'], $tca_config['flood_ip_window']);
+      $flood_allowed_entity = flood_is_allowed('tca_failed_authentication_attempt_entity', $tca_config['flood_entity_limit'], $tca_config['flood_entity_window'], "$entity_type-$bundle-" . $entity->id());
+      if (!$flood_allowed_ip || !$flood_allowed_entity) {
+        if (!$flood_allowed_ip) {
+          $message = t('Sorry, too many failed authentication attempts from your IP address. This IP address is temporarily blocked. Try again later.');
+        }
+        if (!$flood_allowed_entity) {
+          $message = t('Sorry, too many failed authentication attempts for this content. Try again later.');
+        }
+        if (!$tca_config['flood_control_silent']) {
+          backdrop_set_message($message, 'error');
+        }
+        // Deny access, and exit.
+        backdrop_access_denied();
+        backdrop_exit();
+      }
+    }
+
+    // Check to see if a token was provided via the URL.
+    $parameter_key = config_get("tca_$entity_type.settings", "$bundle.parameter_key");
+    if (isset($query[$parameter_key])) {
+      $user_token = $query[$parameter_key];
+      if ($user_token == $token) {
+        // If the token matches, then set a session variable and proceed with
+        // viewing the entity.
+        if (!backdrop_session_started()) {
+          // If the user is anonymous, start a session so the token will
+          // persist.
+          backdrop_session_start();
+        }
+        // Store a special token based on the user session, the TCA token and
+        // the site's private key.
+        $_SESSION['tca_token'] = backdrop_get_token($token);
+        // Clear entity event if flood control if set.
+        if ($tca_config['flood_control_active']) {
+          flood_clear_event('tca_failed_authentication_attempt_entity', "$entity_type-$bundle-" . $entity->id());
+        }
+        // Proceed with viewing the entity.
+        return;
+      }
+      else {
+        // If the token doesn't match:
+        // Apply flood control if set.
+        if ($tca_config['flood_control_active']) {
+          flood_register_event('tca_failed_authentication_attempt_ip', $tca_config['flood_ip_window']);
+          flood_register_event('tca_failed_authentication_attempt_entity', $tca_config['flood_entity_window'], "$entity_type-$bundle-" . $entity->id());
+        }
+        // Clear the session token if it exists.
+        unset($_SESSION['tca_token']);
+        // Deny access, and exit.
+        backdrop_access_denied();
+        backdrop_exit();
+      }
     }
     else {
-      // Deliver a 403, and exit.
-      backdrop_access_denied();
-      backdrop_exit();
+      // If a token hasn't been provided check for a session token.
+      $session_token = $_SESSION['tca_token'] ?? FALSE;
+      if ($session_token && backdrop_valid_token($session_token, $token)) {
+        // If token matches:
+        // Clear entity event if flood control if set.
+        if ($tca_config['flood_control_active']) {
+          flood_clear_event('tca_failed_authentication_attempt_entity', "$entity_type-$bundle-" . $entity->id());
+        }
+        // Proceed with viewing the entity.
+        return;
+      }
+      else {
+        // Clear the session token if it exists.
+        unset($_SESSION['tca_token']);
+        // Apply flood control if set.
+        if ($tca_config['flood_control_active']) {
+          flood_register_event('tca_failed_authentication_attempt_ip', $tca_config['flood_ip_window']);
+          flood_register_event('tca_failed_authentication_attempt_entity', $tca_config['flood_entity_window'], "$entity_type-$bundle-" . $entity->id());
+        }
+        // If the session token doesn't exist or doesn't match, deny access,
+        // and exit.
+        backdrop_access_denied();
+        backdrop_exit();
+      }
     }
   }
+  // If TCA protection isn't set for the entity, then no checks or actions
+  // needed.
 }
 
 /**
  * Generates and Token Content Access Token access token for use in URLs.
  *
  * This is a modified version of backdrop_get_token that uses a combination
- * of the entity id, current revision id, bundle.
+ * of the entity id, current revision id, and bundle.
  *
  * @param string $entity_type
  *   The entity type; e.g. 'node' or 'user'.
@@ -513,4 +954,48 @@ function tca_get_token($entity_type, $entity, $value = '') {
   else {
     return FALSE;
   }
+}
+
+/**
+ * Validate the token to ensure that no characters are used that would be
+ * encoded by `urlencode()`.
+ */
+function tca_manual_token_validate($element, &$form_state) {
+  $value = (string) $element['#value'];
+  if ($value !== urlencode($value)) {
+    form_error($element, t("Token must only contain alpha-numeric characters (a-z OR A-Z OR 0-9) or special characters that are acceptable for URL parameter values ( - OR _ )."));
+  }
+}
+
+/**
+ * Validate the parameter key to ensure reserved key 'q' is not used and to
+ * ensure that no characters are used that would be encoded by `urlencode()`.
+ */
+function tca_parameter_key_validate($element, &$form_state) {
+  $value = (string) $element['#value'];
+  if ($value == 'q') {
+    form_error($element, t("Parameter Key cannot be 'q' as this can be used in Backdrop if Clean URLs are not enabled."));
+  }
+  if ($value !== urlencode($value)) {
+    form_error($element, t("Parameter Key must only contain alpha-numeric characters (a-z OR A-Z OR 0-9) or special characters that are acceptable for URL parameter names ( - OR _ )."));
+  }
+}
+
+/**
+ * Implements hook_views_api().
+ */
+function tca_views_api() {
+  return array(
+    'api' => 3,
+    'path' => backdrop_get_path('module', 'tca') . '/views',
+  );
+}
+
+/**
+ * Implements hook_autoload_info().
+ */
+function tca_autoload_info() {
+  return array(
+    'tca_views_plugin_display_extender' => 'views/tca_views_plugin_display_extender.inc',
+  );
 }
