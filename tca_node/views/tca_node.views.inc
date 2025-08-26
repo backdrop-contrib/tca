@@ -73,51 +73,122 @@ function tca_node_views_query_alter(&$view, &$query) {
   }
 
   // Check if the view is filtered by content type.
-  if (isset($view->filter['type'])) {
-    // If it is get the filter value(s).
-    $filter_content_type = $view->filter['type']->value;
+  // Loop through all the filter keys for any starting with 'type'.
+  $filter_keys = array_keys($view->filter);
+  foreach ($filter_keys as $index => $key) {
+    if (strpos($key, 'type') !== 0) {
+      // Remove any that don't start with 'type'.
+      unset($filter_keys[$index]);
+    }
+  }
+  if (!empty($filter_keys)) {
+    // If there is at least one filter with 'type' in, get any included values.
+    $filter_content_type = array();
+    foreach ($filter_keys as $key) {
+      $filter = $view->filter[$key];
+      if ($filter->operator == 'in') {
+        $filter_content_type = array_merge($filter_content_type, $filter->value);
+      }
+    }
   }
   else {
-    // If it isn't, generate a comparable list of all node types.
+    // If the view isn't filtered by content type, generate a comparable list of
+    // all node types.
     $filter_content_type = array_keys(node_type_get_types());
   }
 
-  // Loop through each node type and check if the user has the bypass tca_node
-  // permission for that type.
+  // Loop through each node type.
   $type_bypass_permissions = array();
+  $type_tca_active = array();
   foreach ($filter_content_type as $type) {
+    // Check if the type is active.
+    $type_tca_active[$type] = (bool) tca_get_active_bundle('node', $type);
+    // Check if the user has the bypass tca_node permission for that type.
     $type_bypass_permissions[$type] = (bool) user_access('bypass tca_node ' . $type);
   }
+
+  // Count how node types are active.
+  $count_tca_active = array_sum($type_tca_active);
+  // If none of the node types are active for TCA then no alter is needed.
+  if ($count_tca_active == 0) {
+    return;
+  }
+
   $count_permissions = array_sum($type_bypass_permissions);
-  // Add all the following conditions to an OR group within WHERE.
-  $query->set_where_group('OR', 'tca');
   if ($count_permissions == count($filter_content_type)) {
     // If bypass permission exists for all content types for user then no alter
     // is needed.
     return;
   }
   else {
-    // Add a counter to ensure that query placeholders are unique for each
-    // content type.
-    $i = 0;
-    // If some bypass permissions exist then prepare a statement for each
-    // content type.
+    // Loop through each type and:
+    // - if the bypass permission exists or the type is not TCA active, add to
+    //   $pass_types array.
+    // - if the bypass permission does not exist and the type is TCA active,
+    //   add to the $check_types array.
+    $pass_types = array();
+    $check_types = array();
     foreach ($type_bypass_permissions as $type => $bypass) {
-      // Ensure placeholders are unique for each type.
-      $placeholder = ":type_$i";
       if ($bypass || !tca_get_active_bundle('node', $type)) {
-        // If bypass permission or content type not activated for Token Content
-        // Access then add simple statement for type.
-        $query->add_where_expression('tca', "node.type = $placeholder", array($placeholder => $type));
+        $pass_types[] = $type;
       }
       else {
-        // If no bypass permission and content type is activated for Token
-        // Content Access then add statement for type and check for tca_active
-        // status.
-        $query->add_where_expression('tca', "node.type = $placeholder AND (node.tca_active = '0' OR node.tca_active IS NULL)", array($placeholder => $type));
+        $check_types[] = $type;
       }
-      // Increment the counter.
-      $i++;
+    }
+    // Define the WHERE expression snippet.
+    // If type is pass_types then no other checks needed.
+    $snippet = "(node.type IN (:pass_types))";
+    $snippet .= " OR ";
+    // If type in check_types then only include nodes where TCA is not active.
+    $snippet .= "(node.type IN (:check_types) AND ";
+    $snippet .= "(node.tca_active = '0' OR node.tca_active IS NULL))";
+    // Define the placeholders using the relevant array.
+    $placeholders = array(
+      ':pass_types' => $pass_types,
+      ':check_types' => $check_types,
+    );
+    // Determine where to put the expression in relation to existing WHERE
+    // groups.
+    $where_group_count = count($query->where);
+    $target_groups = array();
+    switch ($where_group_count) {
+      case 0:
+        $target_groups[] = 'tca';
+        break;
+      case 1:
+        foreach ($query->where as $key => $where_group) {
+          if ($where_group['type'] == 'AND') {
+            $target_groups[] = $key;
+          }
+          else {
+            $target_groups[] = 'tca';
+          }
+        }
+        break;
+      default:
+        $operator = $query->group_operator;
+        if ($operator == 'AND') {
+          $target_groups[] = 'tca';
+        }
+        else {
+          // Group operator is 'OR'.
+          foreach ($query->where as $key => $where_group) {
+            if ($where_group['type'] == 'AND') {
+              $target_groups[] = $key;
+            }
+            else {
+              // With 'OR' group operator and OR type, there is nowhere the
+              // expression can be added. This scenario, however is unlikely as
+              // there is no need to have seperate groups; all the OR conditions
+              // can be part of a single group.
+            }
+          }
+        }
+    }
+    $target_groups = array_unique($target_groups);
+    foreach ($target_groups as $group) {
+      $query->add_where_expression($group, $snippet, $placeholders);
     }
   }
 }
