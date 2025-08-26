@@ -136,18 +136,30 @@ function tca_node_views_query_alter(&$view, &$query) {
         $check_types[] = $type;
       }
     }
-    // Define the WHERE expression snippet.
-    // If type is pass_types then no other checks needed.
-    $snippet = "(node.type IN (:pass_types))";
-    $snippet .= " OR ";
-    // If type in check_types then only include nodes where TCA is not active.
-    $snippet .= "(node.type IN (:check_types) AND ";
-    $snippet .= "(node.tca_active = '0' OR node.tca_active IS NULL))";
     // Define the placeholders using the relevant array.
     $placeholders = array(
       ':pass_types' => $pass_types,
       ':check_types' => $check_types,
     );
+    // Define the WHERE expression snippet based on if there are just
+    // check_types or a mix of pass_types and check_types (if only pass_types,
+    // then we will have exited earlier without altering the query).
+    if (empty($pass_types)) {
+      // Unset the pass_types from placeholders.
+      unset($placeholders[':pass_types']);
+      // If type in check_types then only include nodes where TCA is not active.
+      $snippet = "(node.type IN (:check_types) AND ";
+      $snippet .= "(node.tca_active = '0' OR node.tca_active IS NULL))";
+    }
+    else {
+      // If type is pass_types then no other checks needed.
+      $snippet = "(node.type IN (:pass_types))";
+      $snippet .= " OR ";
+      // If type in check_types then only include nodes where TCA is not active.
+      $snippet .= "(node.type IN (:check_types) AND ";
+      $snippet .= "(node.tca_active = '0' OR node.tca_active IS NULL))";
+    }
+
     // Determine where to put the expression in relation to existing WHERE
     // groups.
     $where_group_count = count($query->where);
