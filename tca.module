@@ -70,7 +70,7 @@ function tca_modules_enabled($modules) {
       }
 
       // Ensure permissions are added to admin role.
-      user_modules_installed($module);
+      user_modules_installed(array($module));
     }
   }
 }
