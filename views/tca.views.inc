@@ -63,7 +63,7 @@ function tca_views_query_alter(&$view, &$query) {
     // Check to see if a token was provided via the URL.
     if (isset($url_query[$key])) {
       $user_token = $url_query[$key];
-      if ($user_token == $view_token) {
+      if (hash_equals($view_token, $user_token)) {
         // If the token matches, then set a session variable and proceed with
         // viewing the view.
         if (!backdrop_session_started()) {

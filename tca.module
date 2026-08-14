@@ -859,7 +859,7 @@ function tca_execute($entity_type, $entity) {
     $parameter_key = config_get("tca_$entity_type.settings", "$bundle.parameter_key");
     if (isset($query[$parameter_key])) {
       $user_token = $query[$parameter_key];
-      if ($user_token == $token) {
+      if (hash_equals($token, $user_token)) {
         // If the token matches, then set a session variable and proceed with
         // viewing the entity.
         if (!backdrop_session_started()) {
