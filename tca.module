@@ -99,11 +99,6 @@ function tca_modules_uninstalled($modules) {
           db_drop_field($entity_info['base table'], $name);
         }
       }
-
-      // Delete any variables that are set for this entity.
-      foreach ($entity_info['bundles'] as $bundle => $info) {
-        tca_delete_variables($tca_info[$module]['entity type'], $bundle);
-      }
     }
   }
 }
@@ -851,7 +846,7 @@ function tca_execute($entity_type, $entity) {
         if (!$flood_allowed_entity) {
           $message = t('Sorry, too many failed authentication attempts for this content. Try again later.');
         }
-        if (!$tca_config['flood_control_silent']) {
+        if (!$tca_config['flood_control_silent'] && isset($message)) {
           backdrop_set_message($message, 'error');
         }
         // Deny access, and exit.
