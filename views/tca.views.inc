@@ -47,7 +47,7 @@ function tca_views_query_alter(&$view, &$query) {
         if (!$flood_allowed_view) {
           $message = t('Sorry, too many failed authentication attempts for this View. Try again later.');
         }
-        if (!$tca_config['flood_control_silent']) {
+        if (!$tca_config['flood_control_silent'] && isset($message)) {
           backdrop_set_message($message, 'error');
         }
         $view_access = FALSE;
